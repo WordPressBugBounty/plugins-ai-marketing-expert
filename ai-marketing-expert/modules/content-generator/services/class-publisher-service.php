@@ -116,7 +116,7 @@ class PublisherService {
 			$post_type = 'post';
 		}
 
-		$clean_content = GenerateController::clean_ai_body( (string) $article->content );
+		$clean_content = GenerateController::clean_ai_body( (string) $article->content, (string) ( $article->title ?? '' ) );
 		if ( $clean_content && $clean_content !== $article->content ) {
 			$wpdb->update(
 				$table,
@@ -281,34 +281,47 @@ class PublisherService {
 
 	private function set_seo_meta( int $wp_post_id, object $article ): void {
 		$meta_title = sanitize_text_field( $article->meta_title ?? '' );
-		$meta_desc  = sanitize_text_field( $article->meta_description ?? '' );
+		$meta_desc  = sanitize_textarea_field( $article->meta_description ?? '' );
 
-		if ( ! $meta_title && ! $meta_desc ) {
+		// Focus keyword: first article keyword (Brain puts focus first).
+		$focus = '';
+		$kw_raw = json_decode( $article->keywords ?? '[]', true );
+		if ( is_array( $kw_raw ) && ! empty( $kw_raw[0] ) ) {
+			$focus = sanitize_text_field( (string) $kw_raw[0] );
+		}
+
+		if ( ! $meta_title && ! $meta_desc && '' === $focus ) {
 			return;
 		}
 
-		// Yoast SEO.
+		// Canonical store + multi-plugin sync (Yoast, RankMath, AIOSEO,
+		// SEOPress, Slim SEO, TSF) + aime_seo_sync hook for the long tail.
+		if ( class_exists( '\\WPSpace\\AiMarketingExpert\\Modules\\Seo\\Services\\SeoAdapterService' ) ) {
+			\WPSpace\AiMarketingExpert\Modules\Seo\Services\SeoAdapterService::sync( $wp_post_id, $focus, $meta_title, $meta_desc );
+			return;
+		}
+
+		// Fallback when SEO module inactive: legacy direct keys only.
 		if ( $meta_title ) {
 			update_post_meta( $wp_post_id, '_yoast_wpseo_title', $meta_title );
 		}
 		if ( $meta_desc ) {
 			update_post_meta( $wp_post_id, '_yoast_wpseo_metadesc', $meta_desc );
 		}
-
-		// Rank Math.
 		if ( $meta_title ) {
 			update_post_meta( $wp_post_id, 'rank_math_title', $meta_title );
 		}
 		if ( $meta_desc ) {
 			update_post_meta( $wp_post_id, 'rank_math_description', $meta_desc );
 		}
-
-		// All-in-One SEO.
 		if ( $meta_title ) {
 			update_post_meta( $wp_post_id, '_aioseo_title', $meta_title );
 		}
 		if ( $meta_desc ) {
 			update_post_meta( $wp_post_id, '_aioseo_description', $meta_desc );
+		}
+		if ( '' !== $focus ) {
+			update_post_meta( $wp_post_id, 'aime_seo_keyword', $focus );
 		}
 	}
 

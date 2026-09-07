@@ -18,8 +18,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class SocialMediaModule extends Module {
 
-	const DB_VERSION = '1.0.0';
-
 	/* ── Module identity ────────────────────────────────── */
 
 	public function get_id(): string {
@@ -189,7 +187,7 @@ class SocialMediaModule extends Module {
 
 	private function maybe_create_tables(): void {
 		$installed = get_option( 'aime_social_media_db_version', '' );
-		if ( version_compare( $installed, self::DB_VERSION, '>=' ) ) {
+		if ( version_compare( $installed, AIME_SOCIAL_DB_VERSION, '>=' ) ) {
 			return;
 		}
 
@@ -199,7 +197,7 @@ class SocialMediaModule extends Module {
 		$charset = $wpdb->get_charset_collate();
 		$this->create_tables( $charset );
 
-		update_option( 'aime_social_media_db_version', self::DB_VERSION );
+		update_option( 'aime_social_media_db_version', AIME_SOCIAL_DB_VERSION );
 	}
 
 	public function create_tables( string $charset_collate ): void {

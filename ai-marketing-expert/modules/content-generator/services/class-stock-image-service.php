@@ -58,16 +58,149 @@ class StockImageService {
 		return '' !== self::get_api_key( $provider );
 	}
 
+	/**
+	 * Preferred photo orientation for auto-picked images.
+	 *
+	 * Tall portrait photos render as huge vertical blocks inside article
+	 * content, so auto-pick defaults to landscape. Manual search uses the
+	 * same default; users who want portraits can switch to "any".
+	 *
+	 * @return string 'landscape'|'any'.
+	 */
+	public static function get_orientation(): string {
+		$settings    = get_option( self::OPTION_KEY, array() );
+		$orientation = sanitize_key( (string) ( $settings['image_orientation'] ?? 'landscape' ) );
+		return 'any' === $orientation ? 'any' : 'landscape';
+	}
+
+	/**
+	 * Whether a normalized image result is landscape (or square).
+	 * Portrait photos (height clearly greater than width) are skipped by
+	 * auto-pick so in-body images never become huge vertical blocks.
+	 */
+	private static function is_landscape( array $image ): bool {
+		$w = (int) ( $image['width'] ?? 0 );
+		$h = (int) ( $image['height'] ?? 0 );
+		if ( $w <= 0 || $h <= 0 ) {
+			return true; // Unknown dimensions — don't reject blindly.
+		}
+		return $h <= $w;
+	}
+
+	/**
+	 * Reuse window in days: provider images used within this window are
+	 * skipped by auto-pick so daily posts stop repeating the same photo.
+	 * 0 = allow repeats (feature off).
+	 */
+	public static function get_reuse_days(): int {
+		$settings = get_option( self::OPTION_KEY, array() );
+		if ( ! is_array( $settings ) || ! isset( $settings['image_reuse_days'] ) ) {
+			return 60;
+		}
+		return max( 0, min( 365, (int) $settings['image_reuse_days'] ) );
+	}
+
+	/**
+	 * Provider image keys (provider:id) used within the reuse window.
+	 * Fail-soft: returns empty array when the log table is missing.
+	 *
+	 * @return string[]
+	 */
+	public static function recently_used_keys(): array {
+		$days = self::get_reuse_days();
+		if ( $days <= 0 ) {
+			return array();
+		}
+		global $wpdb;
+		$table = $wpdb->prefix . 'aime_content_images';
+		if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
+			return array();
+		}
+		$rows = $wpdb->get_col( $wpdb->prepare(
+			"SELECT DISTINCT CONCAT(provider, ':', provider_image_id) FROM {$table}
+			 WHERE created_at >= DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY) LIMIT 500",
+			$days
+		) );
+		return is_array( $rows ) ? array_values( array_filter( array_map( 'strval', $rows ) ) ) : array();
+	}
+
+	/**
+	 * Log an auto-picked image (insert-or-touch timestamp on re-pick).
+	 * Never throws; logging must never break publishing.
+	 */
+	public static function record_use( array $image, int $attachment_id = 0, string $query = '' ): void {
+		try {
+			global $wpdb;
+			$table = $wpdb->prefix . 'aime_content_images';
+			if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
+				return;
+			}
+			$provider = sanitize_key( (string) ( $image['provider'] ?? '' ) );
+			$pid      = sanitize_text_field( (string) ( $image['id'] ?? '' ) );
+			if ( '' === $provider || '' === $pid ) {
+				return;
+			}
+			$wpdb->replace(
+				$table,
+				array(
+					'provider'          => $provider,
+					'provider_image_id' => $pid,
+					'attachment_id'     => $attachment_id > 0 ? $attachment_id : null,
+					'query'             => mb_substr( sanitize_text_field( $query ), 0, 255 ),
+					'created_at'        => current_time( 'mysql', true ),
+				),
+				array( '%s', '%s', '%d', '%s', '%s' )
+			);
+			// Opportunistic prune: keep the log bounded (1-in-20 chance per record).
+			if ( 1 === wp_rand( 1, 20 ) ) {
+				$wpdb->query(
+					$wpdb->prepare(
+						"DELETE FROM {$table} WHERE created_at < DATE_SUB(UTC_TIMESTAMP(), INTERVAL %d DAY)",
+						366
+					)
+				);
+			}
+		} catch ( \Throwable $e ) {
+			aime_log( 'Image usage log failed: ' . $e->getMessage(), 'warning', 'content-generator' );
+		}
+	}
+
+	/**
+	 * Remove recently-reused images from a candidate list.
+	 *
+	 * @param array<int,array> $images Candidate image arrays.
+	 * @return array<int,array> Filtered list (unfiltered input when empty after filter).
+	 */
+	private static function exclude_recently_used( array $images ): array {
+		$used = self::recently_used_keys();
+		if ( ! $used ) {
+			return $images;
+		}
+		$lookup   = array_flip( $used );
+		$filtered = array_values( array_filter( $images, static function ( array $img ) use ( $lookup ): bool {
+			$key = sanitize_key( (string) ( $img['provider'] ?? '' ) ) . ':' . sanitize_text_field( (string) ( $img['id'] ?? '' ) );
+			return ! isset( $lookup[ $key ] );
+		} ) );
+		return $filtered ?: $images; // Fail-soft: reuse beats no image.
+	}
+
 	/* ── Search ──────────────────────────────────────── */
 
 	/**
 	 * Search the configured provider. Returns a normalized result:
 	 * array{success:bool, provider:string, images:array<array{id,provider,thumb,preview,full,width,height,photographer,source_url,alt}>, error?:string}
+	 *
+	 * @param string $orientation '' = site setting, 'landscape'|'any' to override.
 	 */
-	public function search( string $query, int $per_page = 12, int $page = 1 ): array {
+	public function search( string $query, int $per_page = 12, int $page = 1, string $orientation = '' ): array {
 		$query    = trim( $query );
 		$per_page = max( 1, min( 30, $per_page ) );
 		$page     = max( 1, $page );
+		if ( '' === $orientation ) {
+			$orientation = self::get_orientation();
+		} else {
+			$orientation = 'any' === sanitize_key( $orientation ) ? 'any' : 'landscape';
+		}
 
 		if ( '' === $query ) {
 			return array( 'success' => false, 'error' => __( 'Search query is empty.', 'ai-marketing-expert' ) );
@@ -84,23 +217,38 @@ class StockImageService {
 		}
 
 		return 'pixabay' === $provider
-			? $this->search_pixabay( $query, $per_page, $page, $key )
-			: $this->search_pexels( $query, $per_page, $page, $key );
+			? $this->search_pixabay( $query, $per_page, $page, $key, $orientation )
+			: $this->search_pexels( $query, $per_page, $page, $key, $orientation );
 	}
 
 	/**
 	 * Top search result, or null (used by workflow cron auto-pick).
+	 * Prefers a landscape, recently-unused image so auto-picked photos are
+	 * never huge vertical blocks nor yesterday's repeat; falls back to the
+	 * top result when every candidate is filtered out.
 	 */
 	public function first( string $query ): ?array {
 		$result = $this->search( $query, 3, 1 );
 
-		return ( ! empty( $result['success'] ) && ! empty( $result['images'] ) ) ? $result['images'][0] : null;
+		if ( empty( $result['success'] ) || empty( $result['images'] ) ) {
+			return null;
+		}
+		$candidates = self::exclude_recently_used( $result['images'] );
+		foreach ( $candidates as $image ) {
+			if ( self::is_landscape( $image ) ) {
+				return $image;
+			}
+		}
+		return $candidates[0] ?? $result['images'][0];
 	}
 
 	/**
 	 * Random image from search results — intelligently picks variety instead of
 	 * always the first result. Fetches more results and randomly selects from them
 	 * to ensure different posts get different images even with similar queries.
+	 *
+	 * Recently-used provider images (reuse window) are excluded; page 2 is
+	 * tried once when page 1 is exhausted by the exclusion.
 	 *
 	 * @param string $query Stock search query.
 	 * @return ?array Image array or null if search fails.
@@ -113,9 +261,27 @@ class StockImageService {
 			return null;
 		}
 
+		$candidates = self::exclude_recently_used( $result['images'] );
+
+		// Page-2 fallback: when every page-1 result was recently used, pull a
+		// fresh page once rather than repeating yesterday's photo.
+		if ( count( $candidates ) < count( $result['images'] ) && count( $candidates ) <= 1 ) {
+			$page2 = $this->search( $query, 8, 2 );
+			if ( ! empty( $page2['success'] ) && ! empty( $page2['images'] ) ) {
+				$fresh = self::exclude_recently_used( $page2['images'] );
+				if ( $fresh ) {
+					$candidates = $fresh;
+				}
+			}
+		}
+
 		// Randomly pick one from available results, weighted toward earlier results
 		// (they tend to be more relevant) but avoiding always picking the first.
-		$images = $result['images'];
+		// Portraits are filtered out first so auto-picked photos stay landscape.
+		$images = array_values( array_filter( $candidates, array( self::class, 'is_landscape' ) ) );
+		if ( ! $images ) {
+			$images = $candidates; // Fail-soft: all portraits, keep variety.
+		}
 		$count  = count( $images );
 
 		// Use a weighted random: favor the first 3-4 results but allow variety.
@@ -138,13 +304,17 @@ class StockImageService {
 		return $images[ $index ] ?? null;
 	}
 
-	private function search_pexels( string $query, int $per_page, int $page, string $key ): array {
+	private function search_pexels( string $query, int $per_page, int $page, string $key, string $orientation = 'landscape' ): array {
+		$args = array(
+			'query'    => rawurlencode( $query ),
+			'per_page' => $per_page,
+			'page'     => $page,
+		);
+		if ( 'landscape' === $orientation ) {
+			$args['orientation'] = 'landscape';
+		}
 		$url = add_query_arg(
-			array(
-				'query'    => rawurlencode( $query ),
-				'per_page' => $per_page,
-				'page'     => $page,
-			),
+			$args,
 			'https://api.pexels.com/v1/search'
 		);
 
@@ -195,16 +365,20 @@ class StockImageService {
 		);
 	}
 
-	private function search_pixabay( string $query, int $per_page, int $page, string $key ): array {
+	private function search_pixabay( string $query, int $per_page, int $page, string $key, string $orientation = 'landscape' ): array {
+		$args = array(
+			'key'        => rawurlencode( $key ),
+			'q'          => rawurlencode( $query ),
+			'image_type' => 'photo',
+			'safesearch' => 'true',
+			'per_page'   => max( 3, $per_page ), // Pixabay minimum is 3.
+			'page'       => $page,
+		);
+		if ( 'landscape' === $orientation ) {
+			$args['orientation'] = 'horizontal';
+		}
 		$url = add_query_arg(
-			array(
-				'key'        => rawurlencode( $key ),
-				'q'          => rawurlencode( $query ),
-				'image_type' => 'photo',
-				'safesearch' => 'true',
-				'per_page'   => max( 3, $per_page ), // Pixabay minimum is 3.
-				'page'       => $page,
-			),
+			$args,
 			'https://pixabay.com/api/'
 		);
 
@@ -326,7 +500,20 @@ class StockImageService {
 			return '';
 		}
 
-		foreach ( $result['images'] as $image ) {
+		// Landscape first so in-body photos never become huge vertical
+		// blocks; portraits stay as last-resort fallback (fail-soft).
+		// Recently-used provider images sort last so daily posts vary.
+		$images = $result['images'];
+		$used   = array_flip( self::recently_used_keys() );
+		usort( $images, static function ( array $a, array $b ) use ( $used ): int {
+			$ka = sanitize_key( (string) ( $a['provider'] ?? '' ) ) . ':' . sanitize_text_field( (string) ( $a['id'] ?? '' ) );
+			$kb = sanitize_key( (string) ( $b['provider'] ?? '' ) ) . ':' . sanitize_text_field( (string) ( $b['id'] ?? '' ) );
+			$score_a = (int) ! self::is_landscape( $a ) * 10 + ( isset( $used[ $ka ] ) ? 5 : 0 );
+			$score_b = (int) ! self::is_landscape( $b ) * 10 + ( isset( $used[ $kb ] ) ? 5 : 0 );
+			return $score_a - $score_b;
+		} );
+
+		foreach ( $images as $image ) {
 			$import = $this->import_to_media_library( $image['full'], '' !== $image['alt'] ? $image['alt'] : $query );
 			if ( empty( $import['success'] ) ) {
 				continue;
@@ -336,6 +523,7 @@ class StockImageService {
 				continue;
 			}
 			$used_ids[] = $attachment_id;
+			self::record_use( $image, $attachment_id, $query );
 
 			// Embed size is a site setting (Content → Settings → Images).
 			$settings = get_option( self::OPTION_KEY, array() );
@@ -345,14 +533,16 @@ class StockImageService {
 			}
 
 			$img = wp_get_attachment_image( $attachment_id, $size, false, array(
-				'class'   => 'aime-inline-image',
-				'loading' => 'lazy',
+				'class'    => 'aime-inline-image',
+				'loading'  => 'lazy',
+				'decoding' => 'async',
+				'style'    => 'max-width:100%;height:auto;',
 			) );
 			if ( '' === $img ) {
 				continue;
 			}
 
-			return '<figure class="wp-block-image size-' . esc_attr( $size ) . ' aime-inline-figure">' . $img . '</figure>';
+			return '<figure class="wp-block-image size-' . esc_attr( $size ) . ' aime-inline-figure" style="max-width:100%;">' . $img . '</figure>';
 		}
 
 		return '';

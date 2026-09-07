@@ -2,7 +2,7 @@
 Contributors: nalam
 Tags: ai marketing, email marketing, ai content generator, ai chatbot, seo analyzer
 Requires at least: 6.2
-Tested up to: 7.1
+Tested up to: 7.0
 Requires PHP: 8.0
 Stable tag: trunk
 License: GPLv2 or later
@@ -343,6 +343,15 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 
 == Changelog ==
 
+= 1.2.3 =
+* New: AI Brain Skills — reusable rule blocks (SEO Strategist, Readability Coach free; Image Director, Link Planner, WordPress Expert, Social Hook Writer plus custom skills on Pro) merged into the strategist prompt; Skill library popup and per-workflow selection.
+* New: Universal SEO contract for generated posts — AI Brain now outputs focus keyword, SEO title, meta description, short slug and image queries; the writer enforces keyword placement, TOC, link minimums and keyword image alts so RankMath/Yoast score green.
+* New: Global SEO adapter — canonical SEO store synced to Yoast, Rank Math, All in One SEO, SEOPress, Slim SEO and The SEO Framework, with aime_seo_sync hook for any other plugin; lightweight frontend meta fallback when no SEO plugin is active.
+* New: Stock image controls — landscape orientation filter, automatic portrait skipping, duplicate avoidance within a configurable reuse window (new usage log table), and max-width display hardening.
+* Fixed: generated article body no longer repeats the post title as a leading heading (single-H1 rule with prompt + automatic stripping on generate, save and publish paths).
+* Improved: Prompt library and Skill library are now separate single-purpose popups; skill selection lives only in the popup with a compact sidebar summary.
+* Improved: workflow blog posts auto-generate meta title/description (previously only manual generation did) and use short keyword slugs under 75 characters.
+
 = 1.2.2 =
 * New: Prompt Library — browse professionally written starting points for the AI Brain strategy prompt, Custom AI Prompt step and a new blog "Writing brief" field; pick one and edit freely.
 * New: Generate Blog Post step now supports multiple categories (multi-select with search) and an optional writing brief with its own prompt library.
@@ -406,6 +415,9 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 * React-based unified admin dashboard
 
 == Upgrade Notice ==
+
+= 1.2.3 =
+AI Brain Skills, universal SEO output, global SEO plugin support, smarter stock images without repeats, and no more duplicate titles. Recommended for all users.
 
 = 1.2.2 =
 Prompt Library, multi-category blog steps, smarter Funnel enrollment, timezone-safe social scheduling, and reliable AI Brain JSON output with reasoning models. Recommended for all users.

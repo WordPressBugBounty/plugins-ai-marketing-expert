@@ -80,6 +80,9 @@ class ContentGeneratorService {
 			. "- \"outline\": array of {heading, level} objects representing the article structure (level should be a number: 2 or 3)\n"
 			. "Return ONLY the JSON object. No thinking, no reasoning, no commentary, no explanation before or after the JSON.\n"
 			. "The body must be valid HTML.\n"
+			. "BODY STRUCTURE (critical): do NOT repeat the title as the first heading — the theme already renders the title as H1. "
+			. "Start the body with an intro <p> paragraph, then use H2 section headings that DIFFER from the title. "
+			. "Never use <h1> inside the body.\n"
 			. "KEYWORD REQUIREMENTS: The target keywords MUST appear naturally in the title, in headings (h2/h3), and throughout the body text. "
 			. "Use the primary keyword in the first paragraph and aim for 0.5-2%% keyword density.\n"
 			. "IMPORTANT: Write ALL content in full. Do NOT use placeholders like \"...\", \"[content]\", or ellipsis. Every section must contain complete, detailed text.";
@@ -192,6 +195,14 @@ class ContentGeneratorService {
 					$parsed['excerpt'] = $excerpt_result['excerpt'];
 				}
 			}
+		}
+
+		// Single-H1 rule: the theme renders the title, so the body must never
+		// open with a duplicate title heading (the exact bug in the report:
+		// title shown twice). Stripped here so every caller benefits —
+		// workflow, manual generate, and stitched continuations alike.
+		if ( ! empty( $parsed['body'] ) && ! empty( $parsed['title'] ) ) {
+			$parsed['body'] = self::strip_duplicate_title_heading( (string) $parsed['body'], (string) $parsed['title'] );
 		}
 
 		return array(
@@ -387,6 +398,61 @@ class ContentGeneratorService {
 		}
 
 		return $outline;
+	}
+
+	/**
+	 * Strip a duplicate title heading from the top of an article body.
+	 *
+	 * The theme already renders post_title as H1, so a body that opens with
+	 * the same title (as <h1>, or <h2>/<h3> with matching text) shows the
+	 * title twice. Rules:
+	 *  - A leading <h1> is always removed (body must never contain H1).
+	 *  - A leading <h2>/<h3> is removed only when its text matches the
+	 *    title (exact after normalization, or >=85% similar).
+	 * Only the first block is inspected — real section headings deeper in
+	 * the article are never touched. Never throws; returns input on failure.
+	 *
+	 * @param string $html  Article body HTML.
+	 * @param string $title Article title.
+	 */
+	public static function strip_duplicate_title_heading( string $html, string $title ): string {
+		$html = ltrim( $html );
+		if ( '' === $html || '' === trim( $title ) ) {
+			return $html;
+		}
+		if ( ! preg_match( '/\A<(h[123])\b[^>]*>(.*?)<\/\1>/is', $html, $m ) ) {
+			return $html;
+		}
+		$tag          = strtolower( (string) $m[1] );
+		$heading_text = trim( wp_strip_all_tags( (string) $m[2] ) );
+		if ( '' === $heading_text ) {
+			return $html;
+		}
+		if ( 'h1' === $tag ) {
+			$stripped = ltrim( substr( $html, strlen( $m[0] ) ) );
+			return '' !== $stripped ? $stripped : $html;
+		}
+		$norm = static function ( string $s ): string {
+			$s = html_entity_decode( wp_strip_all_tags( $s ), ENT_QUOTES, 'UTF-8' );
+			$s = mb_strtolower( $s );
+			$s = (string) preg_replace( '/[^\p{L}\p{N}\s]/u', '', $s );
+			return (string) preg_replace( '/\s+/u', ' ', trim( $s ) );
+		};
+		$n_heading = $norm( $heading_text );
+		$n_title   = $norm( $title );
+		if ( '' === $n_heading || '' === $n_title ) {
+			return $html;
+		}
+		$duplicate = $n_heading === $n_title;
+		if ( ! $duplicate ) {
+			similar_text( $n_heading, $n_title, $percent );
+			$duplicate = $percent >= 85;
+		}
+		if ( ! $duplicate ) {
+			return $html;
+		}
+		$stripped = ltrim( substr( $html, strlen( $m[0] ) ) );
+		return '' !== $stripped ? $stripped : $html;
 	}
 
 	/* ── GENERATE outline ────────────────────────────── */
@@ -688,6 +754,43 @@ class ContentGeneratorService {
 			'success' => true,
 			'data'    => $parsed ?: array( 'raw' => $result['content'] ),
 		);
+	}
+
+	/* ── UNIVERSAL SEO CONTRACT ──────────────────────── */
+
+	/**
+	 * Build hard SEO instructions from an AI Brain SEO package.
+	 *
+	 * This is the plugin-agnostic content contract derived from the
+	 * RankMath/Yoast checklist: focus keyword placement, title formula,
+	 * density, headings, links and media. Appended to the writer prompt
+	 * so any SEO plugin scores green.
+	 *
+	 * All inputs are already sanitized by the caller.
+	 */
+	public static function build_seo_instructions( string $focus_keyword, string $seo_title = '', string $meta_description = '', string $slug = '' ): string {
+		$focus_keyword = trim( $focus_keyword );
+		if ( '' === $focus_keyword ) {
+			return '';
+		}
+		$lines   = array();
+		$lines[] = 'UNIVERSAL SEO CONTRACT (must follow exactly):';
+		$lines[] = '- Primary focus keyword: "' . $focus_keyword . '". Use it in the JSON title, in the first 100 words, in at least one H2 heading, and naturally throughout for ~1% density (0.8-1.5%).';
+		$lines[] = '- Title must start with or contain the focus keyword near the beginning, include one number and one power word, max 60 chars.';
+		$lines[] = '- Use 3+ H2 sections; at least one H2 must contain the focus keyword or a close variant. Short paragraphs (max 4 lines), one bulleted/numbered list minimum.';
+		$lines[] = '- Include 2 internal link suggestions as plain anchor phrases and 1 authoritative external reference mention (do not invent URLs).';
+		$lines[] = '- Body must contain complete detailed sections with FAQ (4 questions) and 3 key takeaways at the end.';
+		$lines[] = '- Never repeat the article title as an H1/H2 at the start of the body — start with an intro paragraph; section headings must differ from the title.';
+		if ( '' !== $seo_title ) {
+			$lines[] = '- Suggested SEO title from strategist: "' . $seo_title . '". Adapt it but keep keyword-front + number + under 60 chars.';
+		}
+		if ( '' !== $meta_description ) {
+			$lines[] = '- Suggested meta angle: "' . $meta_description . '".';
+		}
+		if ( '' !== $slug ) {
+			$lines[] = '- Suggested slug: "' . $slug . '".';
+		}
+		return implode( "\n", $lines ) . "\n";
 	}
 
 	/* ── HELPERS ─────────────────────────────────────── */

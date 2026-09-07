@@ -20,8 +20,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class ContentGeneratorModule extends Module {
 
-	const DB_VERSION = '1.6.0';
-
 	/* ── Module identity ────────────────────────────────── */
 
 	public function get_id(): string {
@@ -98,7 +96,7 @@ class ContentGeneratorModule extends Module {
 
 	private function maybe_create_tables(): void {
 		$installed = get_option( 'aime_content_generator_db_version', '' );
-		if ( version_compare( $installed, self::DB_VERSION, '>=' ) ) {
+		if ( version_compare( $installed, AIME_CONTENT_DB_VERSION, '>=' ) ) {
 			return;
 		}
 
@@ -115,7 +113,7 @@ class ContentGeneratorModule extends Module {
 		// Run migrations.
 		$this->run_migrations( $installed );
 
-		update_option( 'aime_content_generator_db_version', self::DB_VERSION );
+		update_option( 'aime_content_generator_db_version', AIME_CONTENT_DB_VERSION );
 	}
 
 	public function create_tables( string $charset_collate ): void {
@@ -215,6 +213,20 @@ class ContentGeneratorModule extends Module {
 			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
 			PRIMARY KEY (id),
 			KEY idx_article (article_id),
+			KEY idx_created (created_at)
+		) $charset_collate;" );
+
+		// Stock image usage log — powers duplicate avoidance: auto-pick skips
+		// provider images used within the reuse window (Content → Settings → Images).
+		dbDelta( "CREATE TABLE {$p}aime_content_images (
+			id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+			provider VARCHAR(20) NOT NULL DEFAULT '',
+			provider_image_id VARCHAR(100) NOT NULL DEFAULT '',
+			attachment_id BIGINT UNSIGNED DEFAULT NULL,
+			query VARCHAR(255) NOT NULL DEFAULT '',
+			created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+			PRIMARY KEY (id),
+			UNIQUE KEY idx_provider_image (provider, provider_image_id),
 			KEY idx_created (created_at)
 		) $charset_collate;" );
 	}
@@ -355,6 +367,26 @@ class ContentGeneratorModule extends Module {
 	/* ── Migrations ──────────────────────────────────────── */
 
 	private function run_migrations( string $installed_version ): void {
+		// v1.7.0: Stock image usage log for duplicate avoidance.
+		if ( version_compare( $installed_version, '1.7.0', '<' ) ) {
+			global $wpdb;
+			$table = $wpdb->prefix . 'aime_content_images';
+			if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
+				require_once ABSPATH . 'wp-admin/includes/upgrade.php';
+				dbDelta( "CREATE TABLE {$table} (
+					id BIGINT UNSIGNED NOT NULL AUTO_INCREMENT,
+					provider VARCHAR(20) NOT NULL DEFAULT '',
+					provider_image_id VARCHAR(100) NOT NULL DEFAULT '',
+					attachment_id BIGINT UNSIGNED DEFAULT NULL,
+					query VARCHAR(255) NOT NULL DEFAULT '',
+					created_at DATETIME NOT NULL DEFAULT CURRENT_TIMESTAMP,
+					PRIMARY KEY (id),
+					UNIQUE KEY idx_provider_image (provider, provider_image_id),
+					KEY idx_created (created_at)
+				) {$wpdb->get_charset_collate()};" );
+			}
+		}
+
 		// v1.6.0: Seed default brand voices for existing installs.
 		if ( version_compare( $installed_version, '1.6.0', '<' ) ) {
 			$this->seed_default_brand_voices();

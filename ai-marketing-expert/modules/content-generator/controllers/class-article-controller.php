@@ -178,7 +178,7 @@ class ArticleController {
 			return new \WP_REST_Response( array( 'message' => __( 'Article not found.', 'ai-marketing-expert' ) ), 404 );
 		}
 
-		$clean_content = GenerateController::clean_ai_body( (string) $article->content );
+		$clean_content = GenerateController::clean_ai_body( (string) $article->content, (string) ( $article->title ?? '' ) );
 		if ( $clean_content && $clean_content !== $article->content ) {
 			$clean_content = aime_kses_article( $clean_content );
 			$wpdb->update(

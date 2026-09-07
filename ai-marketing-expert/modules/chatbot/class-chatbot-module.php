@@ -19,7 +19,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class ChatbotModule extends Module {
 
-	const DB_VERSION = '1.2.0';
 	private const CACHE_GROUP = 'aime_chatbot_module';
 	private const CACHE_TTL   = 30;
 
@@ -123,14 +122,14 @@ class ChatbotModule extends Module {
 
 	private function maybe_create_tables(): void {
 		$installed = get_option( 'aime_chatbot_db_version', '' );
-		if ( version_compare( $installed, self::DB_VERSION, '>=' ) ) {
+		if ( version_compare( $installed, AIME_CHATBOT_DB_VERSION, '>=' ) ) {
 			return;
 		}
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 		global $wpdb;
 		$charset = $wpdb->get_charset_collate();
 		$this->create_tables( $charset );
-		update_option( 'aime_chatbot_db_version', self::DB_VERSION );
+		update_option( 'aime_chatbot_db_version', AIME_CHATBOT_DB_VERSION );
 	}
 
 	public function create_tables( string $charset_collate ): void {

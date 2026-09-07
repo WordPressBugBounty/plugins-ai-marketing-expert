@@ -1,0 +1,376 @@
+/**
+ * AI Marketing Expert - Upgrade to Pro Notice Styles.
+ * Compliant with WordPress Admin Notice Standards (Clean white background, no intrusive colors).
+ * Enhanced with tasteful warm amber/orange accents for high attention and conversion.
+ */
+
+.notice.aime-pro-upgrade-notice {
+	background: #ffffff !important;
+	border: 1px solid #e2e8f0 !important;
+	border-left: 4px solid #f59e0b !important;
+	border-radius: 8px !important;
+	box-shadow: 0 4px 18px rgba(15, 23, 42, 0.06) !important;
+	margin: 20px 20px 20px 0 !important;
+	padding: 16px 20px 18px !important;
+	position: relative;
+	font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Oxygen-Sans, Ubuntu, Cantarell, "Helvetica Neue", sans-serif;
+	box-sizing: border-box;
+}
+
+/* Ensure notice within #aime-app or standard wrap aligns nicely */
+.wrap > .notice.aime-pro-upgrade-notice {
+	margin-top: 15px !important;
+}
+
+.aime-pro-notice-wrap {
+	display: flex;
+	flex-direction: column;
+	gap: 12px;
+}
+
+/* ── Tags / Badges Header Row ── */
+.aime-pro-notice-tags {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 8px;
+	margin-bottom: 6px;
+}
+
+.aime-notice-badge {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	padding: 3px 10px;
+	border-radius: 20px;
+	font-size: 11px;
+	font-weight: 600;
+	letter-spacing: 0.2px;
+	text-transform: uppercase;
+}
+
+/* Green Milestone Badge */
+.aime-badge-milestone {
+	background: #f0fdf4;
+	color: #166534;
+	border: 1px solid #bbf7d0;
+}
+
+/* Warm Amber/Red Special Deal Badge */
+.aime-badge-deal {
+	background: #fff7ed;
+	color: #c2410c;
+	border: 1px solid #fed7aa;
+}
+
+.aime-badge-deal del {
+	opacity: 0.6;
+	text-decoration: line-through;
+	margin-right: 3px;
+	color: #9a3412;
+}
+
+.aime-badge-deal strong {
+	color: #c2410c;
+	font-size: 12px;
+	font-weight: 800;
+}
+
+.aime-badge-fire {
+	font-size: 12px;
+}
+
+.aime-save-pill {
+	background: linear-gradient(135deg, #ef4444 0%, #dc2626 100%);
+	color: #ffffff !important;
+	padding: 1px 7px;
+	border-radius: 12px;
+	font-size: 10px;
+	font-weight: 700;
+	letter-spacing: 0.3px;
+	margin-left: 5px;
+	text-transform: uppercase;
+	box-shadow: 0 1px 3px rgba(220, 38, 38, 0.35);
+}
+
+/* Pulsing Red/Amber Dot */
+.aime-badge-pulse {
+	width: 7px;
+	height: 7px;
+	border-radius: 50%;
+	background-color: #ea580c;
+	box-shadow: 0 0 0 0 rgba(234, 88, 12, 0.7);
+	animation: aimeWarmPulse 1.8s infinite;
+}
+
+@keyframes aimeWarmPulse {
+	0% {
+		transform: scale(0.95);
+		box-shadow: 0 0 0 0 rgba(234, 88, 12, 0.7);
+	}
+	70% {
+		transform: scale(1);
+		box-shadow: 0 0 0 6px rgba(234, 88, 12, 0);
+	}
+	100% {
+		transform: scale(0.95);
+		box-shadow: 0 0 0 0 rgba(234, 88, 12, 0);
+	}
+}
+
+/* ── Notice Title & Description ── */
+.aime-pro-notice-title {
+	margin: 0 0 4px 0 !important;
+	padding: 0 !important;
+	font-size: 16px !important;
+	font-weight: 700 !important;
+	color: #0f172a !important;
+	line-height: 1.3 !important;
+}
+
+.aime-pro-notice-desc {
+	margin: 0 !important;
+	padding: 0 !important;
+	font-size: 13px !important;
+	color: #475569 !important;
+	line-height: 1.5 !important;
+	max-width: 980px;
+}
+
+.aime-desc-highlight {
+	color: #0f172a;
+	font-weight: 700;
+	background: #fef3c7;
+	padding: 1px 6px;
+	border-radius: 4px;
+	border: 1px solid #fde68a;
+	display: inline;
+}
+
+/* ── Feature Pills Badges ── */
+.aime-pro-notice-features {
+	display: flex;
+	flex-wrap: wrap;
+	gap: 6px;
+	margin: 4px 0 2px;
+}
+
+.aime-feature-pill {
+	display: inline-flex;
+	align-items: center;
+	gap: 5px;
+	background: #f8fafc;
+	border: 1px solid #e2e8f0;
+	border-radius: 16px;
+	padding: 4px 10px;
+	font-size: 12px;
+	color: #334155;
+	line-height: 1.3;
+	transition: all 0.2s ease-in-out;
+}
+
+.aime-feature-pill strong {
+	color: #0f172a;
+	font-weight: 600;
+}
+
+.aime-feature-pill:hover {
+	background: #ffffff;
+	border-color: #cbd5e1;
+	transform: translateY(-1px);
+	box-shadow: 0 2px 5px rgba(0, 0, 0, 0.04);
+}
+
+/* Subtle Warm Accent for Key Highlights */
+.aime-feature-pill--hot {
+	background: #fffbeb;
+	border-color: #fde68a;
+	color: #92400e;
+}
+
+.aime-feature-pill--hot strong {
+	color: #78350f;
+}
+
+.aime-feature-pill--hot:hover {
+	background: #fef3c7;
+	border-color: #fcd34d;
+}
+
+.aime-pill-icon {
+	font-size: 12px;
+}
+
+/* ── Footer / CTA Section ── */
+.aime-pro-notice-footer {
+	display: flex;
+	flex-wrap: wrap;
+	align-items: center;
+	justify-content: space-between;
+	gap: 12px;
+	padding-top: 8px;
+	border-top: 1px solid #f1f5f9;
+}
+
+.aime-pro-notice-actions {
+	display: inline-flex;
+	flex-wrap: wrap;
+	align-items: center;
+	gap: 10px;
+}
+
+/* High-Converting Primary Quick Buy Button (Warm Sunset Gradient) */
+.aime-pro-upgrade-notice .button.aime-btn-quickbuy {
+	background: linear-gradient(135deg, #f97316 0%, #ea580c 45%, #dc2626 100%) !important;
+	border: none !important;
+	color: #ffffff !important;
+	font-size: 13px !important;
+	font-weight: 600 !important;
+	line-height: 1 !important;
+	padding: 9px 18px !important;
+	height: auto !important;
+	border-radius: 6px !important;
+	display: inline-flex !important;
+	align-items: center !important;
+	gap: 6px !important;
+	box-shadow: 0 3px 10px rgba(234, 88, 12, 0.35) !important;
+	transition: all 0.25s cubic-bezier(0.4, 0, 0.2, 1) !important;
+	text-decoration: none !important;
+	position: relative;
+	overflow: hidden;
+}
+
+.aime-pro-upgrade-notice .button.aime-btn-quickbuy::after {
+	content: '';
+	position: absolute;
+	top: -50%;
+	left: -50%;
+	width: 200%;
+	height: 200%;
+	background: linear-gradient(
+		60deg,
+		transparent,
+		rgba(255, 255, 255, 0.3),
+		transparent
+	);
+	transform: rotate(30deg) translateY(-100%);
+	animation: aimeShimmer 3.8s infinite;
+}
+
+@keyframes aimeShimmer {
+	0% {
+		transform: rotate(30deg) translateY(-100%);
+	}
+	20%, 100% {
+		transform: rotate(30deg) translateY(100%);
+	}
+}
+
+.aime-pro-upgrade-notice .button.aime-btn-quickbuy:hover,
+.aime-pro-upgrade-notice .button.aime-btn-quickbuy:focus {
+	transform: translateY(-1px) scale(1.01);
+	box-shadow: 0 5px 16px rgba(234, 88, 12, 0.5) !important;
+	color: #ffffff !important;
+}
+
+.aime-btn-bolt {
+	font-size: 13px;
+	animation: aimeBoltBounce 2s infinite ease-in-out;
+}
+
+@keyframes aimeBoltBounce {
+	0%, 100% {
+		transform: translateY(0);
+	}
+	50% {
+		transform: translateY(-2px);
+	}
+}
+
+/* Secondary Plans Button */
+.aime-pro-upgrade-notice .button.aime-btn-plans {
+	background: #ffffff !important;
+	border: 1px solid #cbd5e1 !important;
+	color: #334155 !important;
+	font-size: 13px !important;
+	font-weight: 500 !important;
+	line-height: 1 !important;
+	padding: 8px 14px !important;
+	height: auto !important;
+	border-radius: 6px !important;
+	transition: all 0.2s ease !important;
+	text-decoration: none !important;
+}
+
+.aime-pro-upgrade-notice .button.aime-btn-plans:hover {
+	border-color: #94a3b8 !important;
+	color: #0f172a !important;
+	background: #f8fafc !important;
+}
+
+/* Dismiss Link */
+.aime-notice-dismiss-link {
+	background: none !important;
+	border: none !important;
+	color: #64748b !important;
+	font-size: 12px !important;
+	cursor: pointer !important;
+	padding: 6px 10px !important;
+	text-decoration: underline !important;
+	text-underline-offset: 2px !important;
+	transition: color 0.15s ease !important;
+}
+
+.aime-notice-dismiss-link:hover {
+	color: #0f172a !important;
+}
+
+/* Guarantee / Trust Badges */
+.aime-pro-notice-guarantee {
+	display: inline-flex;
+	align-items: center;
+	gap: 6px;
+	font-size: 11px;
+	color: #64748b;
+}
+
+.aime-guarantee-dot {
+	color: #cbd5e1;
+}
+
+/* Dismiss Button Adjustments */
+.aime-pro-upgrade-notice .notice-dismiss {
+	top: 14px;
+	right: 14px;
+	padding: 8px;
+}
+
+.aime-pro-upgrade-notice .notice-dismiss:before {
+	font-size: 16px;
+}
+
+/* ── Responsive Behavior ── */
+@media (max-width: 900px) {
+	.aime-pro-notice-footer {
+		flex-direction: column;
+		align-items: flex-start;
+	}
+}
+
+@media (max-width: 600px) {
+	.notice.aime-pro-upgrade-notice {
+		padding: 14px 14px 16px !important;
+	}
+
+	.aime-pro-notice-actions {
+		flex-direction: column;
+		align-items: stretch;
+		width: 100%;
+	}
+
+	.aime-pro-upgrade-notice .button.aime-btn-quickbuy,
+	.aime-pro-upgrade-notice .button.aime-btn-plans {
+		justify-content: center !important;
+		text-align: center !important;
+	}
+}

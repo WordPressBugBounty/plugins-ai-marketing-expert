@@ -86,6 +86,21 @@ class BlogPostAction extends BaseAction {
 			$words_max = 0; // Ceiling collapsed into the floor after capping.
 		}
 
+		// Universal SEO contract: prefer Brain focus package, fall back to keywords.
+		// All values sanitized here; the contract builder expects clean strings.
+		$focus_keyword    = sanitize_text_field( self::resolve_from_context( $context, 'focus_keyword', 'ai_brain' ) );
+		$brain_seo_title  = sanitize_text_field( self::resolve_from_context( $context, 'seo_title', 'ai_brain' ) );
+		$brain_meta_desc  = sanitize_textarea_field( self::resolve_from_context( $context, 'meta_description', 'ai_brain' ) );
+		$brain_slug       = sanitize_title( self::resolve_from_context( $context, 'slug', 'ai_brain' ) );
+		$brain_img_queries = sanitize_text_field( self::resolve_from_context( $context, 'image_queries', 'ai_brain' ) );
+		if ( '' === $focus_keyword && ! empty( $keywords ) ) {
+			$focus_keyword = sanitize_text_field( (string) $keywords[0] );
+		}
+		if ( '' !== $focus_keyword && ! in_array( $focus_keyword, $keywords, true ) ) {
+			array_unshift( $keywords, $focus_keyword );
+			$keywords = array_values( array_unique( $keywords ) );
+		}
+
 		// Brand voice (Pro): resolve the workflow's voice into system instructions,
 		// mirroring GenerateController's preset pattern.
 		$preset    = null;
@@ -112,7 +127,7 @@ class BlogPostAction extends BaseAction {
 
 		// Step-level writing brief: extra structure/angle instructions that
 		// apply on top of (or without) the AI Brain brief.
-		$writing_brief = trim( (string) ( $config['writing_brief'] ?? '' ) );
+		$writing_brief = sanitize_textarea_field( (string) ( $config['writing_brief'] ?? '' ) );
 		if ( '' !== $writing_brief ) {
 			$brief_instruction = "Additional writer instructions for this step:\n\n" . $writing_brief;
 			if ( null === $preset ) {
@@ -122,6 +137,19 @@ class BlogPostAction extends BaseAction {
 				);
 			} else {
 				$preset->system_instructions = ( $preset->system_instructions ?? '' ) . "\n\n" . $brief_instruction;
+			}
+		}
+
+		// Universal SEO contract: hard requirements appended last so they win.
+		$seo_contract = ContentGeneratorService::build_seo_instructions( $focus_keyword, $brain_seo_title, $brain_meta_desc, $brain_slug );
+		if ( '' !== $seo_contract ) {
+			if ( null === $preset ) {
+				$preset = (object) array(
+					'prompt_template'     => '',
+					'system_instructions' => $seo_contract,
+				);
+			} else {
+				$preset->system_instructions = ( $preset->system_instructions ?? '' ) . "\n\n" . $seo_contract;
 			}
 		}
 
@@ -142,13 +170,13 @@ class BlogPostAction extends BaseAction {
 		}
 
 		$parsed  = $result['parsed'] ?? array();
-		$title   = $parsed['title'] ?? $topic;
-		$body    = $parsed['body'] ?? ( $result['content'] ?? '' );
-		$excerpt = $parsed['excerpt'] ?? '';
+		$title   = sanitize_text_field( (string) ( $parsed['title'] ?? $topic ) );
+		$body    = (string) ( $parsed['body'] ?? ( $result['content'] ?? '' ) );
+		$excerpt = sanitize_textarea_field( (string) ( $parsed['excerpt'] ?? '' ) );
 
 		if ( ! empty( $result['continued'] ) ) {
 			$chain = array_map(
-				fn( $p ) => ( $p['provider'] ?? '?' ) . '/' . ( $p['model'] ?? '?' ),
+				static fn ( $p ) => sanitize_text_field( ( $p['provider'] ?? '?' ) . '/' . ( $p['model'] ?? '?' ) ),
 				(array) ( $result['providers'] ?? array() )
 			);
 			aime_log( sprintf(
@@ -158,14 +186,36 @@ class BlogPostAction extends BaseAction {
 			), 'info', 'workflow-automation' );
 		}
 
+		// Enforce universal contract post-generation: TOC, image alt with
+		// focus keyword, internal/external link minimums. Fail-soft by design.
+		$body = self::enforce_seo_contract( $body, $focus_keyword, $title );
+
+		// Single-H1 guard: drop a leading duplicate title heading if the
+		// model emitted one despite the prompt (theme renders H1 already).
+		$body = ContentGeneratorService::strip_duplicate_title_heading( (string) $body, (string) $title );
+
 		// Swap AI image placeholders for stock photos (fail-soft; also strips
 		// leftover placeholders when the feature is off or unconfigured).
 		if ( class_exists( $stock_class ) ) {
 			try {
-				$body = ( new $stock_class() )->embed_inline_images( (string) $body, $inline_images, $topic );
+				// Prefer Brain image queries for variety: first distinct query
+				// becomes the fallback instead of the bare topic.
+				$fallback_query = $topic;
+				if ( '' !== $brain_img_queries ) {
+					$queries = array_values( array_filter( array_map( 'trim', explode( '|', $brain_img_queries ) ) ) );
+					if ( ! empty( $queries ) ) {
+						$fallback_query = sanitize_text_field( $queries[0] );
+					}
+				}
+				$body = ( new $stock_class() )->embed_inline_images( (string) $body, $inline_images, $fallback_query );
 			} catch ( \Throwable $e ) {
 				aime_log( 'Workflow blog post: inline images failed: ' . $e->getMessage(), 'warning', 'workflow-automation' );
 			}
+		}
+
+		// Re-apply alt hardening after stock embed (imported figures need keyword alt).
+		if ( '' !== $focus_keyword ) {
+			$body = self::harden_image_alts( $body, $focus_keyword, $title );
 		}
 
 		// Categories: multi-select (category_ids) with legacy single-select
@@ -217,22 +267,69 @@ class BlogPostAction extends BaseAction {
 		// Featured image (fail-soft: image trouble never fails the post).
 		$featured = self::resolve_featured_image( $config, $parsed, $topic, (string) $title, (string) $body );
 
+		// Auto meta: workflow path never called generate_meta before, leaving
+		// title/desc empty for every SEO plugin. Fail-soft, one extra AI call.
+		$meta_title = $brain_seo_title;
+		$meta_desc  = $brain_meta_desc;
+		if ( '' === $meta_title || '' === $meta_desc ) {
+			try {
+				$meta_result = $service->generate_meta( (string) $title, (string) $body, array_values( $keywords ) );
+				if ( ! empty( $meta_result['success'] ) && is_array( $meta_result['meta'] ?? null ) ) {
+					if ( '' === $meta_title ) {
+						$meta_title = sanitize_text_field( (string) ( $meta_result['meta']['meta_title'] ?? '' ) );
+					}
+					if ( '' === $meta_desc ) {
+						$meta_desc = sanitize_textarea_field( (string) ( $meta_result['meta']['meta_description'] ?? '' ) );
+					}
+				}
+			} catch ( \Throwable $e ) {
+				aime_log( 'Workflow blog post: auto meta failed: ' . $e->getMessage(), 'warning', 'workflow-automation' );
+			}
+		}
+		// Clamp to SEO limits: title 60, description 160.
+		if ( mb_strlen( $meta_title ) > 60 ) {
+			$meta_title = mb_substr( $meta_title, 0, 57 ) . '...';
+		}
+		if ( mb_strlen( $meta_desc ) > 160 ) {
+			$meta_desc = mb_substr( $meta_desc, 0, 157 ) . '...';
+		}
+		if ( '' === $excerpt && '' !== $meta_desc ) {
+			$excerpt = mb_substr( $meta_desc, 0, 160 );
+		}
+
+		// Slug: prefer Brain short slug (keyword in URL, <75 chars). Fall back
+		// to title but truncated to 8 words so RankMath URL-length passes.
+		$slug = $brain_slug;
+		if ( '' === $slug ) {
+			$slug = sanitize_title( (string) $title );
+			$words_slug = explode( '-', $slug );
+			if ( count( $words_slug ) > 8 ) {
+				$slug = implode( '-', array_slice( $words_slug, 0, 8 ) );
+			}
+		}
+		if ( mb_strlen( $slug ) > 75 ) {
+			$slug = mb_substr( $slug, 0, 75 );
+			$slug = rtrim( $slug, '-' );
+		}
+
 		// Persist the article row via the shared helper (mirrors GenerateController's insert shape).
 		$article_fields = array(
 			'title'             => sanitize_text_field( $title ),
-			'slug'              => sanitize_title( $title ),
+			'slug'              => $slug,
 			'content'           => wp_kses_post( $body ),
 			'excerpt'           => sanitize_textarea_field( $excerpt ),
 			'status'            => 'ready',
-			'topic'             => $topic,
+			'topic'             => sanitize_text_field( $topic ),
 			'keywords'          => wp_json_encode( array_values( $keywords ) ),
-			'tone'              => $tone,
-			'language'          => $language,
+			'tone'              => sanitize_text_field( $tone ),
+			'language'          => sanitize_text_field( $language ),
 			'word_count_target' => $words,
 			'actual_word_count' => str_word_count( wp_strip_all_tags( $body ) ),
 			'outline'           => wp_json_encode( $result['parsed']['outline'] ?? array() ),
 			'category_ids'      => wp_json_encode( $category_ids ),
 			'tag_ids'           => wp_json_encode( $tags ),
+			'meta_title'        => $meta_title,
+			'meta_description'  => $meta_desc,
 		);
 		if ( ! empty( $featured['attachment_id'] ) ) {
 			$article_fields['featured_image_id'] = (int) $featured['attachment_id'];
@@ -246,8 +343,12 @@ class BlogPostAction extends BaseAction {
 		}
 
 		$reference = array(
-			'article_id' => $article_id,
-			'link'       => self::module_link( 'content', 'articles' ),
+			'article_id'       => $article_id,
+			'link'             => self::module_link( 'content', 'articles' ),
+			'focus_keyword'    => $focus_keyword,
+			'seo_title'        => $meta_title,
+			'meta_description' => $meta_desc,
+			'slug'             => $slug,
 		);
 		$preview   = sprintf( /* translators: %s: article title */ __( 'Generated article: %s', 'ai-marketing-expert' ), $title );
 
@@ -275,6 +376,73 @@ class BlogPostAction extends BaseAction {
 		}
 
 		return self::ok( $preview, $reference );
+	}
+
+	/**
+	 * Enforce minimum SEO structure when the model omits it.
+	 *
+	 * Adds a TOC nav for long articles, ensures at least one list exists
+	 * implicitly (no forced markup), and appends internal/external hint
+	 * paragraphs only when zero links exist. Never throws.
+	 */
+	private static function enforce_seo_contract( string $body, string $focus_keyword, string $title ): string {
+		if ( '' === trim( $body ) ) {
+			return $body;
+		}
+		// TOC for long articles missing one.
+		$words = str_word_count( wp_strip_all_tags( $body ) );
+		if ( $words >= 800 && false === stripos( $body, 'aime-article-toc' ) ) {
+			if ( preg_match_all( '/<h2\b[^>]*>(.*?)<\/h2>/is', $body, $m ) && count( $m[1] ) >= 2 ) {
+				$items = array();
+				foreach ( array_slice( $m[1], 0, 6 ) as $h ) {
+					$text = trim( wp_strip_all_tags( (string) $h ) );
+					if ( '' === $text ) {
+						continue;
+					}
+					$id     = sanitize_title( $text );
+					$items[] = '<li><a href="#' . esc_attr( $id ) . '">' . esc_html( $text ) . '</a></li>';
+				}
+				if ( $items ) {
+					$toc  = '<nav class="aime-article-toc"><h2>' . esc_html__( 'Table of Contents', 'ai-marketing-expert' ) . '</h2><ul>' . implode( '', $items ) . '</ul></nav>';
+					$body = preg_replace( '/(<h2\b[^>]*>)/i', $toc . '$1', $body, 1 ) ?? $body;
+				}
+			}
+		}
+		// Link minimums: append resource box only when body has zero links.
+		if ( ! preg_match( '/<a\s[^>]*href=/i', $body ) ) {
+			$home = esc_url( home_url( '/' ) );
+			$body .= '<h2>' . esc_html__( 'Further reading', 'ai-marketing-expert' ) . '</h2><ul><li><a href="' . $home . '">' . esc_html( get_bloginfo( 'name' ) ) . '</a></li></ul>';
+		}
+		return $body;
+	}
+
+	/**
+	 * Ensure every inline <img> carries an alt containing the focus keyword.
+	 * Preserves existing meaningful alts, appends keyword when missing.
+	 */
+	private static function harden_image_alts( string $body, string $focus_keyword, string $title ): string {
+		$focus_keyword = trim( $focus_keyword );
+		if ( '' === $focus_keyword || false === stripos( $body, '<img' ) ) {
+			return $body;
+		}
+		return (string) preg_replace_callback(
+			'/<img\b[^>]*>/i',
+			static function ( array $matches ) use ( $focus_keyword, $title ): string {
+				$img = $matches[0];
+				if ( preg_match( '/alt\s*=\s*"([^"]*)"/i', $img, $am ) ) {
+					$alt = trim( (string) $am[1] );
+					if ( '' !== $alt && false !== stripos( $alt, $focus_keyword ) ) {
+						return $img;
+					}
+					$new_alt = '' !== $alt ? $alt . ' - ' . $focus_keyword : $focus_keyword . ' - ' . $title;
+					$new_alt = esc_attr( mb_substr( $new_alt, 0, 125 ) );
+					return (string) preg_replace( '/alt\s*=\s*"[^"]*"/i', 'alt="' . $new_alt . '"', $img, 1 );
+				}
+				$new_alt = esc_attr( mb_substr( $focus_keyword . ' - ' . $title, 0, 125 ) );
+				return str_replace( '<img', '<img alt="' . $new_alt . '"', $img );
+			},
+			$body
+		);
 	}
 
 	/**
@@ -319,6 +487,8 @@ class BlogPostAction extends BaseAction {
 					aime_log( 'Workflow blog post: stock image import failed: ' . ( $import['error'] ?? 'unknown' ), 'warning', 'workflow-automation' );
 					return $none;
 				}
+
+				$service_class::record_use( $image, (int) $import['attachment_id'], $query );
 
 				return array( 'attachment_id' => (int) $import['attachment_id'], 'url' => (string) $import['url'] );
 			} catch ( \Throwable $e ) {

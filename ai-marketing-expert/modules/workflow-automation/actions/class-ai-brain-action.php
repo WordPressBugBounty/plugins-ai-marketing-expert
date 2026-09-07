@@ -15,6 +15,7 @@ namespace WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Actions;
 
 use WPSpace\AiMarketingExpert\AiProvider;
 use WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Includes\ContextKnowledgeStore;
+use WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Includes\SkillRegistry;
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
@@ -71,6 +72,14 @@ class AiBrainAction extends BaseAction {
 
 		$system_instructions = "You are a content strategist helping plan marketing content.\n\n";
 
+		// Active skills (Option A): composable instruction blocks selected per workflow.
+		// Unknown/deleted skill IDs are dropped silently so old configs never break.
+		$skills            = SkillRegistry::resolve( $config['skill_ids'] ?? array() );
+		$skill_instructions = SkillRegistry::merge_instructions( $skills );
+		if ( '' !== $skill_instructions ) {
+			$system_instructions .= $skill_instructions . "\n";
+		}
+
 		if ( $recent ) {
 			$recent_list = implode( ', ', array_slice( $recent, 0, 20 ) );
 			$system_instructions .= "Topics already covered recently (avoid repeating these):\n{$recent_list}\n\n";
@@ -83,7 +92,10 @@ class AiBrainAction extends BaseAction {
 		$system_instructions .= "---\n\nUser's strategy instructions:\n\n{$strategy_prompt}\n\n";
 		$system_instructions .= "---\n\n";
 
-		// Build structured output schema.
+		// Build structured output schema. SEO package fields are always
+		// requested so downstream steps get a universal content contract
+		// (focus keyword, title, meta, slug, image queries) regardless of
+		// which skills are active — skills only strengthen the instructions.
 		$json_schema = null;
 		if ( $want_json ) {
 			$json_schema = array(
@@ -114,6 +126,35 @@ class AiBrainAction extends BaseAction {
 							'description' => '3-5 SEO keywords',
 							'items'       => array( 'type' => 'string' ),
 						),
+						'focus_keyword' => array(
+							'type'        => 'string',
+							'description' => 'Single primary focus keyword, 2-4 words',
+						),
+						'seo_title'     => array(
+							'type'        => 'string',
+							'description' => 'SEO title max 60 chars, keyword near start, include number',
+						),
+						'meta_description' => array(
+							'type'        => 'string',
+							'description' => 'Meta description 140-160 chars including keyword',
+						),
+						'slug'          => array(
+							'type'        => 'string',
+							'description' => 'Short URL slug, 3-5 lowercase words with keyword',
+						),
+						'image_queries' => array(
+							'type'        => 'array',
+							'description' => '3 distinct stock photo queries, 2-4 concrete words each',
+							'items'       => array( 'type' => 'string' ),
+						),
+						'social_hook'   => array(
+							'type'        => 'string',
+							'description' => 'One-line social hook max 120 chars',
+						),
+						'cta'           => array(
+							'type'        => 'string',
+							'description' => 'Short call to action max 12 words',
+						),
 					),
 					'required'             => array( 'topic', 'angle', 'key_points', 'target_reader', 'keywords' ),
 					'additionalProperties' => false,
@@ -128,6 +169,13 @@ class AiBrainAction extends BaseAction {
 			$system_instructions .= "KEY POINTS: [3-5 bullet points the content should cover]\n";
 			$system_instructions .= "TARGET READER: [who this content is for]\n";
 			$system_instructions .= "KEYWORDS: [3-5 SEO keywords, comma-separated]\n";
+			$system_instructions .= "FOCUS KEYWORD: [single primary keyword, 2-4 words]\n";
+			$system_instructions .= "SEO TITLE: [max 60 chars, keyword near start, include number]\n";
+			$system_instructions .= "META DESCRIPTION: [140-160 chars including keyword]\n";
+			$system_instructions .= "SLUG: [3-5 lowercase words with keyword]\n";
+			$system_instructions .= "IMAGE QUERIES: [3 distinct queries separated by | ]\n";
+			$system_instructions .= "SOCIAL HOOK: [max 120 chars]\n";
+			$system_instructions .= "CTA: [max 12 words]\n";
 		}
 
 		// 5. Call AI with structured output (json_schema) for reliable JSON extraction.
@@ -175,6 +223,25 @@ class AiBrainAction extends BaseAction {
 			$key_points   = implode( "\n", array_map( 'strval', (array) ( $parsed_json['key_points'] ?? array() ) ) );
 			$target       = trim( (string) ( $parsed_json['target_reader'] ?? '' ) );
 			$keywords_raw = implode( ', ', array_map( 'strval', (array) ( $parsed_json['keywords'] ?? array() ) ) );
+			$focus        = sanitize_text_field( (string) ( $parsed_json['focus_keyword'] ?? '' ) );
+			$seo_title    = sanitize_text_field( (string) ( $parsed_json['seo_title'] ?? '' ) );
+			$meta_desc    = sanitize_textarea_field( (string) ( $parsed_json['meta_description'] ?? '' ) );
+			$slug         = sanitize_title( (string) ( $parsed_json['slug'] ?? '' ) );
+			$img_queries  = array_values( array_filter( array_map( 'sanitize_text_field', (array) ( $parsed_json['image_queries'] ?? array() ) ) ) );
+			$social_hook  = sanitize_text_field( (string) ( $parsed_json['social_hook'] ?? '' ) );
+			$cta          = sanitize_text_field( (string) ( $parsed_json['cta'] ?? '' ) );
+			// Normalize: focus defaults to first keyword so downstream never has empty keyword.
+			if ( '' === $focus && '' !== $keywords_raw ) {
+				$parts = array_filter( array_map( 'trim', explode( ',', $keywords_raw ) ) );
+				$focus = sanitize_text_field( (string) ( reset( $parts ) ?: '' ) );
+			}
+			$parsed_json['focus_keyword']    = $focus;
+			$parsed_json['seo_title']        = $seo_title;
+			$parsed_json['meta_description'] = $meta_desc;
+			$parsed_json['slug']             = $slug;
+			$parsed_json['image_queries']    = $img_queries;
+			$parsed_json['social_hook']      = $social_hook;
+			$parsed_json['cta']              = $cta;
 			$output       = (string) wp_json_encode( $parsed_json, JSON_PRETTY_PRINT | JSON_UNESCAPED_SLASHES | JSON_UNESCAPED_UNICODE );
 		} else {
 			$topic        = self::extract_field( $output, 'TOPIC' );
@@ -182,6 +249,18 @@ class AiBrainAction extends BaseAction {
 			$key_points   = self::extract_field( $output, 'KEY POINTS' );
 			$target       = self::extract_field( $output, 'TARGET READER' );
 			$keywords_raw = self::extract_field( $output, 'KEYWORDS' );
+			$focus        = sanitize_text_field( self::extract_field( $output, 'FOCUS KEYWORD' ) );
+			$seo_title    = sanitize_text_field( self::extract_field( $output, 'SEO TITLE' ) );
+			$meta_desc    = sanitize_textarea_field( self::extract_field( $output, 'META DESCRIPTION' ) );
+			$slug         = sanitize_title( self::extract_field( $output, 'SLUG' ) );
+			$img_raw      = self::extract_field( $output, 'IMAGE QUERIES' );
+			$img_queries  = array_values( array_filter( array_map( 'sanitize_text_field', array_map( 'trim', explode( '|', $img_raw ) ) ) ) );
+			$social_hook  = sanitize_text_field( self::extract_field( $output, 'SOCIAL HOOK' ) );
+			$cta          = sanitize_text_field( self::extract_field( $output, 'CTA' ) );
+			if ( '' === $focus && '' !== $keywords_raw ) {
+				$parts = array_filter( array_map( 'trim', explode( ',', $keywords_raw ) ) );
+				$focus = sanitize_text_field( (string) ( reset( $parts ) ?: '' ) );
+			}
 
 			// Fallback: if parsing failed, use first line as topic.
 			if ( '' === $topic ) {
@@ -197,13 +276,23 @@ class AiBrainAction extends BaseAction {
 		);
 
 		// 7. Return structured output for downstream steps.
+		// Universal content contract: every key is scalar or simple array so
+		// BaseAction::resolve_from_context() can read it as {ai_brain.*}.
 		$reference = array(
-			'selected_topic' => $topic,
-			'angle'          => $angle,
-			'key_points'     => $key_points,
-			'target_reader'  => $target,
-			'keywords'       => $keywords_raw,
-			'full_output'    => $output,
+			'selected_topic'   => $topic,
+			'angle'            => $angle,
+			'key_points'       => $key_points,
+			'target_reader'    => $target,
+			'keywords'         => $keywords_raw,
+			'focus_keyword'    => isset( $focus ) ? $focus : '',
+			'seo_title'        => isset( $seo_title ) ? $seo_title : '',
+			'meta_description' => isset( $meta_desc ) ? $meta_desc : '',
+			'slug'             => isset( $slug ) ? $slug : '',
+			'image_queries'    => isset( $img_queries ) ? implode( ' | ', $img_queries ) : '',
+			'social_hook'      => isset( $social_hook ) ? $social_hook : '',
+			'cta'              => isset( $cta ) ? $cta : '',
+			'skill_ids'        => implode( ',', array_map( static fn ( array $s ): string => (string) ( $s['id'] ?? '' ), $skills ) ),
+			'full_output'      => $output,
 		);
 		if ( is_array( $parsed_json ) ) {
 			// Machine-readable brief for advanced downstream consumption

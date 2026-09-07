@@ -63,19 +63,19 @@ class SeoAuditAction extends BaseAction {
 			$post_id = (int) $latest[0];
 		}
 
-		// If auditing a post and still no keyword, try post meta (Yoast/RankMath compat)
+		// If auditing a post and still no keyword, try canonical + plugin meta via adapter.
 		if ( '' === $keyword && $post_id ) {
-			// Try Yoast SEO
-			$keyword = get_post_meta( $post_id, '_yoast_wpseo_focuskw', true );
-
-			// Try RankMath
-			if ( ! $keyword ) {
-				$keyword = get_post_meta( $post_id, 'rank_math_focus_keyword', true );
-			}
-
-			// Try our own meta
-			if ( ! $keyword ) {
-				$keyword = get_post_meta( $post_id, 'aime_seo_keyword', true );
+			if ( class_exists( '\\WPSpace\\AiMarketingExpert\\Modules\\Seo\\Services\\SeoAdapterService' ) ) {
+				$keyword = \WPSpace\AiMarketingExpert\Modules\Seo\Services\SeoAdapterService::get_focus_keyword( $post_id );
+			} else {
+				// Fallback when SEO module inactive.
+				$keyword = get_post_meta( $post_id, '_yoast_wpseo_focuskw', true );
+				if ( ! $keyword ) {
+					$keyword = get_post_meta( $post_id, 'rank_math_focus_keyword', true );
+				}
+				if ( ! $keyword ) {
+					$keyword = get_post_meta( $post_id, 'aime_seo_keyword', true );
+				}
 			}
 
 			// Last resort: extract from title

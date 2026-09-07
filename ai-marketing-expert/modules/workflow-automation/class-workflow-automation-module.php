@@ -38,8 +38,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class WorkflowAutomationModule extends Module {
 
-	const DB_VERSION = '2.0.0';
-
 	/** Dispatch hook — polls for due workflows on the five-minute interval. */
 	const HOOK_DISPATCH = 'aime_workflow_dispatch';
 
@@ -79,6 +77,7 @@ class WorkflowAutomationModule extends Module {
 			'conditional_steps'   => __( 'Conditional branching with Yes/No paths', 'ai-marketing-expert' ),
 			'topic_rotation'      => __( 'Topic & product rotation on generation steps', 'ai-marketing-expert' ),
 			'workflow_templates'  => __( 'Full workflow templates library', 'ai-marketing-expert' ),
+			'brain_skills'        => __( 'Pro AI Brain skills (image, links, social) + custom skills', 'ai-marketing-expert' ),
 		);
 	}
 
@@ -582,6 +581,12 @@ class WorkflowAutomationModule extends Module {
 					),
 				),
 				array(
+					'key'     => 'skill_ids',
+					'label'   => __( 'Skills', 'ai-marketing-expert' ),
+					'type'    => 'skills',
+					'help'    => __( 'Reusable rule blocks merged into the strategist prompt. Pick SEO + Image for daily blogs.', 'ai-marketing-expert' ),
+				),
+				array(
 					'key'     => 'output_format',
 					'label'   => __( 'Output format', 'ai-marketing-expert' ),
 					'type'    => 'select',
@@ -845,7 +850,7 @@ class WorkflowAutomationModule extends Module {
 
 	private function maybe_create_tables(): void {
 		$installed = get_option( 'aime_workflow_automation_db_version', '' );
-		if ( version_compare( $installed, self::DB_VERSION, '>=' ) ) {
+		if ( version_compare( $installed, AIME_WORKFLOW_DB_VERSION, '>=' ) ) {
 			return;
 		}
 
@@ -858,7 +863,7 @@ class WorkflowAutomationModule extends Module {
 			$this->migrate_to_v2();
 		}
 
-		update_option( 'aime_workflow_automation_db_version', self::DB_VERSION );
+		update_option( 'aime_workflow_automation_db_version', AIME_WORKFLOW_DB_VERSION );
 	}
 
 	/**

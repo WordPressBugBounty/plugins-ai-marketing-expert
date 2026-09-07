@@ -18,8 +18,6 @@ if ( ! defined( 'ABSPATH' ) ) {
 
 class SeoModule extends Module {
 
-	const DB_VERSION = '1.1.0';
-
 	/* ── Module identity ────────────────────────────────── */
 
 	public function get_id(): string {
@@ -85,6 +83,9 @@ class SeoModule extends Module {
 
 		// save_post hook for auto-audit & auto-meta.
 		add_action( 'save_post', array( $this, 'handle_post_save' ), 99, 2 );
+
+		// Frontend fallback head tags when no SEO plugin handles output.
+		( new Services\SeoFrontendService() )->init();
 	}
 
 	/**
@@ -147,7 +148,7 @@ class SeoModule extends Module {
 
 	private function maybe_create_tables(): void {
 		$installed = get_option( 'aime_seo_db_version', '' );
-		if ( version_compare( $installed, self::DB_VERSION, '>=' ) ) {
+		if ( version_compare( $installed, AIME_SEO_DB_VERSION, '>=' ) ) {
 			return;
 		}
 
@@ -157,7 +158,7 @@ class SeoModule extends Module {
 		$charset = $wpdb->get_charset_collate();
 		$this->create_tables( $charset );
 
-		update_option( 'aime_seo_db_version', self::DB_VERSION );
+		update_option( 'aime_seo_db_version', AIME_SEO_DB_VERSION );
 	}
 
 	public function create_tables( string $charset_collate ): void {

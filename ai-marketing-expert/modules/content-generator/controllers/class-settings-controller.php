@@ -28,6 +28,8 @@ class SettingsController {
 		'stock_provider'        => 'pexels',
 		'inline_images'         => 0,
 		'inline_image_size'     => 'large',
+		'image_orientation'     => 'landscape',
+		'image_reuse_days'      => 60,
 	);
 
 	/* ── GET settings ────────────────────────────────── */
@@ -93,6 +95,15 @@ class SettingsController {
 		if ( isset( $params['inline_image_size'] ) ) {
 			$size = sanitize_key( $params['inline_image_size'] );
 			$current['inline_image_size'] = in_array( $size, array( 'medium', 'medium_large', 'large', 'full' ), true ) ? $size : 'large';
+		}
+
+		if ( isset( $params['image_orientation'] ) ) {
+			$orientation = sanitize_key( $params['image_orientation'] );
+			$current['image_orientation'] = 'any' === $orientation ? 'any' : 'landscape';
+		}
+
+		if ( isset( $params['image_reuse_days'] ) ) {
+			$current['image_reuse_days'] = max( 0, min( 365, (int) $params['image_reuse_days'] ) );
 		}
 
 		// Stock API keys: stored encrypted, never exported, never echoed back.

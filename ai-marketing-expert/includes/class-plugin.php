@@ -44,6 +44,13 @@ final class Plugin {
 	private ?DashboardWidget $dashboard_widget = null;
 
 	/**
+	 * Upgrade notice handler.
+	 *
+	 * @var UpgradeNotice|null
+	 */
+	private ?UpgradeNotice $upgrade_notice = null;
+
+	/**
 	 * REST API handler.
 	 *
 	 * @var RestApi
@@ -142,6 +149,10 @@ final class Plugin {
 			// Dashboard widget (WP admin dashboard only).
 			require_once AIME_PLUGIN_DIR . 'includes/admin/class-dashboard-widget.php';
 			$this->dashboard_widget = new DashboardWidget( $this->modules );
+
+			// Upgrade to Pro notice.
+			require_once AIME_PLUGIN_DIR . 'includes/admin/class-upgrade-notice.php';
+			$this->upgrade_notice = new UpgradeNotice();
 		}
 
 		/**

@@ -157,6 +157,32 @@ class WorkflowRestController {
 				'permission_callback' => $perm,
 			),
 		) );
+
+		register_rest_route( $this->ns, $base . '/skills', array(
+			array(
+				'methods'             => 'GET',
+				'callback'            => array( $this, 'get_skills' ),
+				'permission_callback' => $perm,
+			),
+			array(
+				'methods'             => 'POST',
+				'callback'            => array( $this, 'create_skill' ),
+				'permission_callback' => $perm,
+				'args'                => array(
+					'title'        => array( 'type' => 'string', 'required' => true ),
+					'instructions' => array( 'type' => 'string', 'required' => true ),
+					'description'  => array( 'type' => 'string', 'required' => false, 'default' => '' ),
+				),
+			),
+		) );
+
+		register_rest_route( $this->ns, $base . '/skills/(?P<id>[a-z0-9_-]+)', array(
+			array(
+				'methods'             => 'DELETE',
+				'callback'            => array( $this, 'delete_skill' ),
+				'permission_callback' => $perm,
+			),
+		) );
 	}
 
 	/* ── Handlers ───────────────────────────────────────── */
@@ -179,6 +205,44 @@ class WorkflowRestController {
 
 	public function get_actions(): \WP_REST_Response {
 		return new \WP_REST_Response( array( 'actions' => ActionRegistry::for_api() ), 200 );
+	}
+
+	public function get_skills(): \WP_REST_Response {
+		return new \WP_REST_Response( array( 'skills' => \WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Includes\SkillRegistry::for_api() ), 200 );
+	}
+
+	public function create_skill( \WP_REST_Request $req ): \WP_REST_Response {
+		// Custom skills are Pro-only (creation gate; built-in Pro skills are
+		// filtered at runtime by SkillRegistry::resolve()).
+		if ( class_exists( '\\WPSpace\\AiMarketingExpert\\Pro' ) ) {
+			$gate = \WPSpace\AiMarketingExpert\Pro::gate( 'Custom Brain Skills' );
+			if ( is_wp_error( $gate ) ) {
+				return new \WP_REST_Response( array( 'message' => $gate->get_error_message(), 'pro_required' => true ), 403 );
+			}
+		}
+		$id = \WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Includes\SkillRegistry::create( array(
+			'title'        => sanitize_text_field( (string) $req->get_param( 'title' ) ),
+			'instructions' => sanitize_textarea_field( (string) $req->get_param( 'instructions' ) ),
+			'description'  => sanitize_text_field( (string) $req->get_param( 'description' ) ),
+		) );
+		if ( is_wp_error( $id ) ) {
+			return new \WP_REST_Response( array( 'message' => $id->get_error_message() ), 400 );
+		}
+		return new \WP_REST_Response( array( 'id' => $id, 'skills' => \WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Includes\SkillRegistry::for_api() ), 201 );
+	}
+
+	public function delete_skill( \WP_REST_Request $req ): \WP_REST_Response {
+		if ( class_exists( '\\WPSpace\\AiMarketingExpert\\Pro' ) ) {
+			$gate = \WPSpace\AiMarketingExpert\Pro::gate( 'Custom Brain Skills' );
+			if ( is_wp_error( $gate ) ) {
+				return new \WP_REST_Response( array( 'message' => $gate->get_error_message(), 'pro_required' => true ), 403 );
+			}
+		}
+		$ok = \WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Includes\SkillRegistry::delete( sanitize_key( (string) $req['id'] ) );
+		if ( ! $ok ) {
+			return new \WP_REST_Response( array( 'message' => __( 'Skill not found or cannot be deleted.', 'ai-marketing-expert' ) ), 404 );
+		}
+		return new \WP_REST_Response( array( 'success' => true ), 200 );
 	}
 
 	public function get_triggers(): \WP_REST_Response {

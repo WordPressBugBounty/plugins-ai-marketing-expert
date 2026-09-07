@@ -41,11 +41,12 @@ class BuiltinTemplates {
 				'topic'         => '',
 			),
 			'steps'            => array(
-				array( 'key' => 'brain', 'parent_key' => '', 'branch' => 'default', 'action_type' => 'ai_brain', 'config' => array(
-					'strategy_prompt' => __( 'Pick a fresh, useful blog topic our audience has not seen recently. Prefer practical how-to guides and listicles relevant to our niche, with a clear angle.', 'ai-marketing-expert' ),
-					'context_urls'    => '',
-					'lookback_days'   => 60,
-				) ),
+			array( 'key' => 'brain', 'parent_key' => '', 'branch' => 'default', 'action_type' => 'ai_brain', 'config' => array(
+				'strategy_prompt' => __( 'Pick a fresh, useful blog topic our audience has not seen recently. Prefer practical how-to guides and listicles relevant to our niche, with a clear angle.', 'ai-marketing-expert' ),
+				'context_urls'    => '',
+				'lookback_days'   => 60,
+				'skill_ids'       => array( 'aime-seo-strategist', 'aime-readability', 'aime-image-director', 'aime-link-planner' ),
+			) ),
 				array( 'key' => 'blog', 'parent_key' => 'brain', 'branch' => 'default', 'action_type' => 'generate_blog_post', 'config' => array(
 					'word_count'   => 1500,
 					'word_count_max' => 2500,
@@ -98,11 +99,12 @@ class BuiltinTemplates {
 				'topic'         => '',
 			),
 			'steps'            => array(
-				array( 'key' => 'brain', 'parent_key' => '', 'branch' => 'default', 'action_type' => 'ai_brain', 'config' => array(
-					'strategy_prompt' => __( 'Pick a short, punchy topic suited to a daily post and a matching social update. Rotate themes across the week: tips, behind-the-scenes, quick wins, customer stories.', 'ai-marketing-expert' ),
-					'context_urls'    => '',
-					'lookback_days'   => 30,
-				) ),
+			array( 'key' => 'brain', 'parent_key' => '', 'branch' => 'default', 'action_type' => 'ai_brain', 'config' => array(
+				'strategy_prompt' => __( 'Pick a short, punchy topic suited to a daily post and a matching social update. Rotate themes across the week: tips, behind-the-scenes, quick wins, customer stories.', 'ai-marketing-expert' ),
+				'context_urls'    => '',
+				'lookback_days'   => 30,
+				'skill_ids'       => array( 'aime-seo-strategist', 'aime-image-director', 'aime-social-hook' ),
+			) ),
 				array( 'key' => 'blog', 'parent_key' => 'brain', 'branch' => 'default', 'action_type' => 'generate_blog_post', 'config' => array(
 					'word_count'   => 1500,
 					'word_count_max' => 2500,
@@ -139,6 +141,7 @@ class BuiltinTemplates {
 					'strategy_prompt' => __( 'Pick a topic for a cornerstone article our niche is actively searching for. Aim for depth over breadth; the draft will be audited against a quality bar before promotion.', 'ai-marketing-expert' ),
 					'context_urls'    => '',
 					'lookback_days'   => 60,
+					'skill_ids'       => array( 'aime-seo-strategist', 'aime-readability', 'aime-image-director', 'aime-link-planner', 'aime-wordpress-expert' ),
 				) ),
 				array( 'key' => 'blog', 'parent_key' => 'brain', 'branch' => 'default', 'action_type' => 'generate_blog_post', 'config' => array(
 					'word_count'   => 1500,
@@ -209,6 +212,7 @@ class BuiltinTemplates {
 					'strategy_prompt' => __( 'Pick a daily topic our audience will click: news reactions, quick tips, or practical guides. Avoid repeating anything from the last month.', 'ai-marketing-expert' ),
 					'context_urls'    => '',
 					'lookback_days'   => 30,
+					'skill_ids'       => array( 'aime-seo-strategist', 'aime-image-director', 'aime-social-hook' ),
 				) ),
 				array( 'key' => 'blog', 'parent_key' => 'brain', 'branch' => 'default', 'action_type' => 'generate_blog_post', 'config' => array(
 					'word_count'   => 1500,
@@ -261,12 +265,14 @@ class BuiltinTemplates {
 					'context_urls'    => '',
 					'lookback_days'   => 90,
 					'output_format'   => 'json',
+					'skill_ids'       => array( 'aime-seo-strategist', 'aime-readability', 'aime-social-hook' ),
 				) ),
 				array( 'key' => 'blog', 'parent_key' => 'brain', 'branch' => 'default', 'action_type' => 'generate_blog_post', 'config' => array(
 					'word_count'   => 1500,
 					'word_count_max' => 2500,
 					'post_status' => 'draft',
 					'auto_tags'   => true,
+					'inline_images' => 1,
 				) ),
 				array( 'key' => 'adcopy', 'parent_key' => 'brain', 'branch' => 'default', 'action_type' => 'generate_ad_copy', 'config' => array(
 					'variations' => 3,
@@ -300,6 +306,7 @@ class BuiltinTemplates {
 					'strategy_prompt' => __( 'Spotlight one product per run: its best benefit, who it is for, and one objection it removes. The article, ads and email should all sell that same product.', 'ai-marketing-expert' ),
 					'context_urls'    => '',
 					'lookback_days'   => 45,
+					'skill_ids'       => array( 'aime-seo-strategist', 'aime-image-director', 'aime-wordpress-expert' ),
 				) ),
 				array( 'key' => 'blog', 'parent_key' => 'brain', 'branch' => 'default', 'action_type' => 'generate_blog_post', 'config' => array(
 					'word_count'   => 1500,
