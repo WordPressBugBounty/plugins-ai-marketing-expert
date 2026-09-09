@@ -1066,9 +1066,14 @@ class SubscriberController {
 
 		$map = array();
 		foreach ( $pivots as $pv ) {
+			$oid   = (int) ( $pv->object_id ?? 0 );
+			$title = trim( (string) ( $pv->title ?? '' ) );
+			if ( $oid <= 0 || '' === $title ) {
+				continue;
+			}
 			$map[ $pv->subscriber_id ][ $pv->object_type ][] = array(
-				'id'    => (int) $pv->object_id,
-				'title' => $pv->title,
+				'id'    => $oid,
+				'title' => $title,
 			);
 		}
 
@@ -1481,17 +1486,20 @@ class SubscriberController {
 			);
 		}
 
-		// Rate limit: 60 requests per IP per minute.
-		$ip  = sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0' ) );
-		$key = 'aime_wh_' . md5( $ip );
-		$hit = (int) get_transient( $key );
-		if ( $hit >= 60 ) {
-			return new \WP_REST_Response(
-				array( 'message' => __( 'Too many requests. Please try again later.', 'ai-marketing-expert' ) ),
-				429
-			);
+		// Rate limit: filterable ceiling for authenticated webhook subscriptions (default 3600/min).
+		$max_rate = (int) apply_filters( 'aime_webhook_rate_limit', 3600, $request );
+		if ( $max_rate > 0 ) {
+			$ip  = sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0' ) );
+			$key = 'aime_wh_' . md5( $ip );
+			$hit = (int) get_transient( $key );
+			if ( $hit >= $max_rate ) {
+				return new \WP_REST_Response(
+					array( 'message' => __( 'Too many requests. Please try again later.', 'ai-marketing-expert' ) ),
+					429
+				);
+			}
+			set_transient( $key, $hit + 1, MINUTE_IN_SECONDS );
 		}
-		set_transient( $key, $hit + 1, MINUTE_IN_SECONDS );
 
 		global $wpdb;
 		$subscribers_table = $wpdb->prefix . 'aime_subscribers';

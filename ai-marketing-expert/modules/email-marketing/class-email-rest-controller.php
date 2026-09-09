@@ -79,7 +79,12 @@ class EmailRestController {
 	 * in the handlers). Generous per-IP cap to blunt brute-force attempts on
 	 * the API key.
 	 */
-	public function webhook_rate_limit_permission(): bool|\WP_Error {
+	public function webhook_rate_limit_permission( ?\WP_REST_Request $request = null ): bool|\WP_Error {
+		// Valid API key holders bypass brute-force protection
+		if ( $request && \WPSpace\AiMarketingExpert\RestApi::validate_api_key( $request ) ) {
+			return true;
+		}
+
 		if ( ! aime_check_ip_rate_limit( 'email_webhook', 120, MINUTE_IN_SECONDS ) ) {
 			return new \WP_Error(
 				'aime_rate_limited',

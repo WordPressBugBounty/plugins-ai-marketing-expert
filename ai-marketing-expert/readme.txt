@@ -2,7 +2,7 @@
 Contributors: nalam
 Tags: ai marketing, email marketing, ai content generator, ai chatbot, seo analyzer
 Requires at least: 6.2
-Tested up to: 7.0
+Tested up to: 7.1
 Requires PHP: 8.0
 Stable tag: trunk
 License: GPLv2 or later
@@ -343,6 +343,12 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 
 == Changelog ==
 
+= 1.2.4 =
+* Fixed: React crash (Minified React Error #31) on the Subscribers page when tags or list objects contained non-string elements.
+* Fixed: Webhook subscriber rate limiting now allows authenticated API key requests without hitting false 429 errors during bulk syncs or external integration imports.
+* Improved: Defensive pivot data resolution in subscriber REST API to skip orphaned or malformed tag and list relations.
+* Improved: Added `aime_webhook_rate_limit` filter for customizable webhook rate limits.
+
 = 1.2.3 =
 * New: AI Brain Skills — reusable rule blocks (SEO Strategist, Readability Coach free; Image Director, Link Planner, WordPress Expert, Social Hook Writer plus custom skills on Pro) merged into the strategist prompt; Skill library popup and per-workflow selection.
 * New: Universal SEO contract for generated posts — AI Brain now outputs focus keyword, SEO title, meta description, short slug and image queries; the writer enforces keyword placement, TOC, link minimums and keyword image alts so RankMath/Yoast score green.
@@ -415,6 +421,9 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 * React-based unified admin dashboard
 
 == Upgrade Notice ==
+
+= 1.2.4 =
+Subscribers dashboard fix, improved webhook rate limiting for reliable bulk syncs and integrations, and compatibility testing for WordPress 7.1. Recommended for all users.
 
 = 1.2.3 =
 AI Brain Skills, universal SEO output, global SEO plugin support, smarter stock images without repeats, and no more duplicate titles. Recommended for all users.
