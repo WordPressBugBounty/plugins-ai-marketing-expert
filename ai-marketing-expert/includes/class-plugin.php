@@ -186,6 +186,12 @@ final class Plugin {
 		add_action( 'aime_daily_cleanup', array( JobQueue::class, 'cleanup' ) );
 		add_action( 'aime_daily_cleanup', array( UsageTracker::class, 'cleanup' ) );
 		add_action( 'aime_daily_cleanup', 'aime_prune_logs' );
+		add_action( 'aime_process_bounce_mailbox', array( ImapBounceService::class, 'process_mailbox' ) );
+
+		// Direct external server cron execution (?aime_cron=1&token=...).
+		if ( isset( $_GET['aime_cron'] ) && ! empty( $_GET['token'] ) ) {
+			$this->handle_external_cron_request();
+		}
 
 		// Consolidated minutely dispatcher (audit P-4).
 		add_action( 'aime_minutely_tasks', array( $this, 'run_minutely_tasks' ) );
@@ -202,6 +208,35 @@ final class Plugin {
 
 		// Register public hooks (tracking, unsubscribe, etc.).
 		$this->register_public_hooks();
+	}
+
+	/**
+	 * Handle direct external server cron request (?aime_cron=1&token=...).
+	 */
+	private function handle_external_cron_request(): void {
+		$token    = sanitize_text_field( wp_unslash( $_GET['token'] ?? '' ) );
+		$expected = get_option( 'aime_cron_secret_token' );
+		if ( empty( $expected ) ) {
+			$expected = wp_generate_password( 32, false );
+			update_option( 'aime_cron_secret_token', $expected, false );
+		}
+
+		if ( ! hash_equals( (string) $expected, (string) $token ) ) {
+			wp_die( 'Unauthorized: invalid cron token.', 'Unauthorized', array( 'response' => 403 ) );
+		}
+
+		@set_time_limit( 120 );
+
+		do_action( 'aime_minutely_tasks' );
+		do_action( 'aime_process_email_queue' );
+		do_action( 'aime_process_automations' );
+		do_action( 'aime_process_bounce_mailbox' );
+
+		wp_send_json_success( array(
+			'status'      => 'executed',
+			'executed_at' => current_time( 'mysql', true ),
+		) );
+		exit;
 	}
 
 	/**

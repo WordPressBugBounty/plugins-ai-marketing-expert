@@ -36,6 +36,8 @@ class PlatformApiService {
 				return $this->publish_instagram( $access_token, $account->platform_user_id, $content, $media_urls );
 			case 'x':
 				return $this->publish_x( $account, $content, $media_urls );
+			case 'linkedin':
+				return $this->publish_linkedin( $access_token, $account->platform_user_id, $content, $media_urls );
 			default:
 				return array( 'success' => false, 'message' => __( 'Unsupported platform.', 'ai-marketing-expert' ) );
 		}
@@ -59,6 +61,8 @@ class PlatformApiService {
 				return $this->validate_facebook_token( $access_token );
 			case 'x':
 				return $this->validate_x_token( $account );
+			case 'linkedin':
+				return $this->validate_linkedin_token( $access_token );
 			default:
 				return array( 'valid' => false, 'message' => __( 'Unsupported platform.', 'ai-marketing-expert' ) );
 		}
@@ -120,6 +124,56 @@ class PlatformApiService {
 			case 'x':
 				// We'd need the full account object for X / Twitter API v2.
 				return array( 'success' => false, 'message' => __( 'Use validate_token for X accounts.', 'ai-marketing-expert' ) );
+
+			case 'linkedin':
+				$response = wp_remote_get(
+					'https://api.linkedin.com/v2/userinfo',
+					array(
+						'timeout' => 15,
+						'headers' => array(
+							'Authorization' => 'Bearer ' . $access_token,
+						),
+					)
+				);
+				if ( is_wp_error( $response ) ) {
+					return array( 'success' => false, 'message' => $response->get_error_message() );
+				}
+				$body    = json_decode( wp_remote_retrieve_body( $response ), true );
+				$user_id = (string) ( $body['sub'] ?? '' );
+				$name    = (string) ( $body['name'] ?? '' );
+				$avatar  = (string) ( $body['picture'] ?? '' );
+
+				if ( empty( $user_id ) ) {
+					$me_resp = wp_remote_get(
+						'https://api.linkedin.com/v2/me',
+						array(
+							'timeout' => 15,
+							'headers' => array(
+								'Authorization' => 'Bearer ' . $access_token,
+							),
+						)
+					);
+					if ( ! is_wp_error( $me_resp ) ) {
+						$me_body = json_decode( wp_remote_retrieve_body( $me_resp ), true );
+						if ( ! empty( $me_body['id'] ) ) {
+							$user_id = (string) $me_body['id'];
+							$first   = $me_body['localizedFirstName'] ?? '';
+							$last    = $me_body['localizedLastName'] ?? '';
+							$name    = trim( "{$first} {$last}" );
+						}
+					}
+				}
+
+				if ( empty( $user_id ) ) {
+					return array( 'success' => false, 'message' => $body['message'] ?? __( 'Could not retrieve LinkedIn profile from token.', 'ai-marketing-expert' ) );
+				}
+
+				return array(
+					'success'          => true,
+					'platform_user_id' => $user_id,
+					'name'             => $name ?: 'LinkedIn Member',
+					'avatar_url'       => $avatar,
+				);
 
 			default:
 				return array( 'success' => false );
@@ -668,5 +722,104 @@ class PlatformApiService {
 			'api_key'    => $api_key,
 			'api_secret' => $api_secret,
 		);
+	}
+
+	/* ------------------------------------------------------------------
+	 * LINKEDIN
+	 * ----------------------------------------------------------------*/
+
+	private function publish_linkedin( string $token, string $user_id, string $content, array $media_urls ): array {
+		if ( empty( $user_id ) ) {
+			return array( 'success' => false, 'message' => __( 'Missing LinkedIn user or organization ID.', 'ai-marketing-expert' ) );
+		}
+
+		// Ensure author URN format
+		$author = ( 0 === strpos( $user_id, 'urn:li:' ) )
+			? $user_id
+			: ( is_numeric( $user_id ) ? "urn:li:organization:{$user_id}" : "urn:li:person:{$user_id}" );
+
+		$share_content = array(
+			'shareCommentary' => array(
+				'text' => $content,
+			),
+			'shareMediaCategory' => 'NONE',
+		);
+
+		// Check if there is an image URL to attach
+		if ( ! empty( $media_urls ) && is_array( $media_urls ) ) {
+			$media_url = esc_url_raw( reset( $media_urls ) );
+			if ( $media_url ) {
+				$share_content['shareMediaCategory'] = 'ARTICLE';
+				$share_content['media']              = array(
+					array(
+						'status'      => 'READY',
+						'originalUrl' => $media_url,
+					),
+				);
+			}
+		} elseif ( preg_match( '/(https?:\/\/[^\s]+)/', $content, $matches ) ) {
+			// Attach link as article if URL found in content
+			$share_content['shareMediaCategory'] = 'ARTICLE';
+			$share_content['media']              = array(
+				array(
+					'status'      => 'READY',
+					'originalUrl' => esc_url_raw( $matches[1] ),
+				),
+			);
+		}
+
+		$payload = array(
+			'author'         => $author,
+			'lifecycleState' => 'PUBLISHED',
+			'specificContent' => array(
+				'com.linkedin.ugc.ShareContent' => $share_content,
+			),
+			'visibility'     => array(
+				'com.linkedin.ugc.MemberNetworkVisibility' => 'PUBLIC',
+			),
+		);
+
+		$response = wp_remote_post( 'https://api.linkedin.com/v2/ugcPosts', array(
+			'timeout' => 30,
+			'headers' => array(
+				'Authorization'             => 'Bearer ' . $token,
+				'Content-Type'              => 'application/json',
+				'X-Restli-Protocol-Version' => '2.0.0',
+			),
+			'body'    => wp_json_encode( $payload ),
+		) );
+
+		if ( is_wp_error( $response ) ) {
+			return array( 'success' => false, 'message' => $response->get_error_message() );
+		}
+
+		$code = wp_remote_retrieve_response_code( $response );
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+
+		if ( $code >= 200 && $code < 300 ) {
+			$post_id = (string) ( $body['id'] ?? wp_remote_retrieve_header( $response, 'x-restli-id' ) ?? '' );
+			return array( 'success' => true, 'platform_post_id' => $post_id );
+		}
+
+		$error_msg = $body['message'] ?? __( 'LinkedIn publish failed.', 'ai-marketing-expert' );
+		return array( 'success' => false, 'message' => $error_msg );
+	}
+
+	private function validate_linkedin_token( string $token ): array {
+		$response = wp_remote_get( 'https://api.linkedin.com/v2/userinfo', array(
+			'timeout' => 10,
+			'headers' => array( 'Authorization' => 'Bearer ' . $token ),
+		) );
+
+		if ( is_wp_error( $response ) ) {
+			return array( 'valid' => false, 'message' => $response->get_error_message() );
+		}
+
+		$code = wp_remote_retrieve_response_code( $response );
+		if ( 200 === $code ) {
+			return array( 'valid' => true );
+		}
+
+		return array( 'valid' => false, 'message' => __( 'LinkedIn token is invalid or expired.', 'ai-marketing-expert' ) );
 	}
 }

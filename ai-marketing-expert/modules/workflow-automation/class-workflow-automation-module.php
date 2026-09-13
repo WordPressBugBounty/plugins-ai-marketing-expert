@@ -29,6 +29,7 @@ use WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Actions\CustomPromptAct
 use WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Actions\AiBrainAction;
 use WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Actions\ConditionAction;
 use WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Actions\SendNotificationAction;
+use WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Actions\SendEmailAction;
 use WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Includes\TriggerDispatcher;
 use WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Templates\BuiltinTemplates;
 
@@ -165,10 +166,14 @@ class WorkflowAutomationModule extends Module {
 	}
 
 	/**
-	 * Prune executions/outputs older than 90 days.
+	 * Prune executions/outputs based on configured data retention policy.
 	 */
 	public function prune_history(): void {
-		( new WorkflowRepository() )->prune_executions( 90 );
+		$settings = get_option( 'aime_settings', array() );
+		$days     = isset( $settings['retention_days'] ) ? absint( $settings['retention_days'] ) : 60;
+		if ( $days > 0 ) {
+			( new WorkflowRepository() )->prune_executions( $days );
+		}
 	}
 
 	/* ── Action registry ────────────────────────────────── */
@@ -680,6 +685,23 @@ class WorkflowAutomationModule extends Module {
 				array( 'key' => 'body', 'label' => __( 'Body', 'ai-marketing-expert' ), 'type' => 'textarea', 'token_hints' => true, 'help' => __( 'Click a {token} below to insert it — the workflow fills it at run time. Example: {generate_blog_post.edit_url} links the new post.', 'ai-marketing-expert' ) ),
 			),
 			'handler'     => array( SendNotificationAction::class, 'run' ),
+		);
+
+		$actions['send_email'] = array(
+			'label'       => __( 'Send Email (Direct)', 'ai-marketing-expert' ),
+			'module'      => 'email-marketing',
+			'description' => __( 'Send an email directly with SMTP rotation and fallback to a specific address or event recipient.', 'ai-marketing-expert' ),
+			'is_pro'      => false,
+			'available'   => static fn (): bool => $module_active( 'email-marketing' ),
+			'fields'      => array(
+				array( 'key' => 'to', 'label' => __( 'Recipient Email (blank = trigger event email)', 'ai-marketing-expert' ), 'type' => 'text', 'token_hints' => true ),
+				array( 'key' => 'subject', 'label' => __( 'Subject', 'ai-marketing-expert' ), 'type' => 'text', 'token_hints' => true, 'required' => true, 'help' => __( 'Supports workflow tokens such as {topic}, {workflow_name}, etc.', 'ai-marketing-expert' ) ),
+				array( 'key' => 'body', 'label' => __( 'Message / Body', 'ai-marketing-expert' ), 'type' => 'textarea', 'token_hints' => true, 'required' => true, 'help' => __( 'HTML and workflow tokens supported. Example: Hello {subscriber.first_name}, check out {generate_blog_post.post_title}!', 'ai-marketing-expert' ) ),
+				array( 'key' => 'from_name', 'label' => __( 'From Name (optional)', 'ai-marketing-expert' ), 'type' => 'text' ),
+				array( 'key' => 'from_email', 'label' => __( 'From Email (optional)', 'ai-marketing-expert' ), 'type' => 'text' ),
+				array( 'key' => 'reply_to', 'label' => __( 'Reply-To Email (optional)', 'ai-marketing-expert' ), 'type' => 'text' ),
+			),
+			'handler'     => array( SendEmailAction::class, 'run' ),
 		);
 
 		return $actions;

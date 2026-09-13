@@ -75,6 +75,9 @@ class SocialMediaModule extends Module {
 			wp_schedule_event( time(), 'five_minutes', 'aime_publish_scheduled_social_posts' );
 		}
 
+		// Auto-share on post publish.
+		add_action( 'transition_post_status', array( $this, 'on_post_publish' ), 10, 3 );
+
 		/*
 		 * Auto-connect (OAuth) callback bridge — DISABLED for now.
 		 *
@@ -174,6 +177,83 @@ class SocialMediaModule extends Module {
 	public function process_scheduled_posts(): void {
 		$publisher = new Services\SocialPublisherService();
 		$publisher->process_queue();
+	}
+
+	/**
+	 * Auto-share to connected social accounts when a post is published.
+	 */
+	public function on_post_publish( string $new_status, string $old_status, \WP_Post $post ): void {
+		if ( 'publish' !== $new_status || 'publish' === $old_status ) {
+			return;
+		}
+
+		if ( wp_is_post_autosave( $post->ID ) || wp_is_post_revision( $post->ID ) ) {
+			return;
+		}
+
+		$allowed_types = array( 'post', 'product' );
+		if ( ! in_array( $post->post_type, $allowed_types, true ) ) {
+			return;
+		}
+
+		$settings = get_option( 'aime_social-media_settings', array() );
+		if ( empty( $settings['auto_share_on_publish'] ) ) {
+			return;
+		}
+
+		// Avoid duplicate auto-shares.
+		$shared = get_post_meta( $post->ID, '_aime_social_auto_shared', true );
+		if ( $shared ) {
+			return;
+		}
+		update_post_meta( $post->ID, '_aime_social_auto_shared', time() );
+
+		global $wpdb;
+		$p = $wpdb->prefix;
+		$accounts = $wpdb->get_results( "SELECT id, platform, name FROM {$p}aime_social_accounts WHERE status = 'connected'" );
+		if ( empty( $accounts ) ) {
+			return;
+		}
+
+		$ai         = new Services\AiSocialService();
+		$permalink  = get_permalink( $post->ID );
+		$thumb_url  = get_the_post_thumbnail_url( $post->ID, 'full' );
+		$media_urls = $thumb_url ? wp_json_encode( array( esc_url_raw( $thumb_url ) ) ) : null;
+		$status     = ! empty( $settings['auto_share_as_draft'] ) ? 'draft' : 'scheduled';
+		$scheduled_at = ( 'scheduled' === $status ) ? gmdate( 'Y-m-d H:i:s', time() + 180 ) : null; // 3 min out
+		$now        = current_time( 'mysql', true );
+
+		foreach ( $accounts as $account ) {
+			// Skip Instagram if no image exists.
+			if ( 'instagram' === $account->platform && empty( $thumb_url ) ) {
+				continue;
+			}
+
+			$caption_res = $ai->generate_caption(
+				$account->platform,
+				$post->post_title,
+				'engaging',
+				wp_trim_words( wp_strip_all_tags( $post->post_content ), 100, '...' )
+			);
+
+			$content = ! empty( $caption_res['content'] ) ? (string) $caption_res['content'] : $post->post_title;
+			if ( 'instagram' !== $account->platform && false === strpos( $content, $permalink ) ) {
+				$content .= "\n\n" . $permalink;
+			}
+
+			$wpdb->insert( "{$p}aime_social_posts", array(
+				'account_id'   => (int) $account->id,
+				'content'      => $content,
+				'media_urls'   => $media_urls,
+				'status'       => $status,
+				'scheduled_at' => $scheduled_at,
+				'ai_generated' => 1,
+				'source_type'  => 'auto_publish',
+				'source_id'    => $post->ID,
+				'created_at'   => $now,
+				'updated_at'   => $now,
+			) );
+		}
 	}
 
 	/* ── REST routes ─────────────────────────────────────── */

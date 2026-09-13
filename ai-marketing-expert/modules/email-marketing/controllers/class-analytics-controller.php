@@ -149,6 +149,59 @@ class AnalyticsController {
 			)
 		);
 
+		// Top locations by opens (Mailchimp style).
+		$opened_count           = (int) ( $stats->opened ?? 0 );
+		$locations_by_opens_raw = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT country, COUNT(DISTINCT subscriber_id) AS opens
+				 FROM %i
+				 WHERE campaign_id = %d AND type = 'open' AND country IS NOT NULL AND country != ''
+				 GROUP BY country
+				 ORDER BY opens DESC
+				 LIMIT 10",
+				$metrics_table,
+				$id
+			)
+		);
+
+		$top_locations_by_opens = array();
+		foreach ( (array) $locations_by_opens_raw as $loc ) {
+			$opens = (int) $loc->opens;
+			$pct   = $opened_count > 0 ? round( ( $opens / $opened_count ) * 100, 1 ) : 0;
+			$top_locations_by_opens[] = array(
+				'country'    => strtoupper( (string) $loc->country ),
+				'opens'      => $opens,
+				'percentage' => $pct,
+			);
+		}
+
+		// Fallback to subscriber profile country for existing historical campaigns.
+		if ( empty( $top_locations_by_opens ) && $opened_count > 0 ) {
+			$sub_countries = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT s.country, COUNT(DISTINCT s.id) AS opens
+					 FROM %i ce
+					 INNER JOIN %i s ON s.id = ce.subscriber_id
+					 WHERE ce.campaign_id = %d AND ce.is_open = 1 AND s.country IS NOT NULL AND s.country != ''
+					 GROUP BY s.country
+					 ORDER BY opens DESC
+					 LIMIT 10",
+					$campaign_emails_table,
+					$wpdb->prefix . 'aime_subscribers',
+					$id
+				)
+			);
+			foreach ( (array) $sub_countries as $loc ) {
+				$opens = (int) $loc->opens;
+				$pct   = $opened_count > 0 ? round( ( $opens / $opened_count ) * 100, 1 ) : 0;
+				$top_locations_by_opens[] = array(
+					'country'    => strtoupper( (string) $loc->country ),
+					'opens'      => $opens,
+					'percentage' => $pct,
+				);
+			}
+		}
+
 		$unsubscribes = (int) $wpdb->get_var(
 			$wpdb->prepare( "SELECT COUNT(DISTINCT subscriber_id) FROM %i WHERE campaign_id = %d AND type = 'unsubscribe'", $metrics_table, $id )
 		);
@@ -160,19 +213,20 @@ class AnalyticsController {
 		}
 
 		return new \WP_REST_Response( array(
-			'campaign'      => $campaign,
-			'total'         => (int) ( $stats->total ?? 0 ),
-			'sent'          => $sent,
-			'failed'        => (int) ( $stats->failed ?? 0 ),
-			'opened'        => (int) ( $stats->opened ?? 0 ),
-			'total_clicks'  => $total_clicks,
-			'unsubscribes'  => $unsubscribes,
-			'open_rate'     => $sent > 0 ? round( ( (int) $stats->opened / $sent ) * 100, 1 ) : 0,
-			'click_rate'    => $sent > 0 ? round( ( $total_clicks / $sent ) * 100, 1 ) : 0,
-			'top_links'     => $top_links,
-			'opens_timeline' => $opens_timeline,
-			'countries'     => $countries,
-			'recipients'    => $recipient_lists,
+			'campaign'               => $campaign,
+			'total'                  => (int) ( $stats->total ?? 0 ),
+			'sent'                   => $sent,
+			'failed'                 => (int) ( $stats->failed ?? 0 ),
+			'opened'                 => (int) ( $stats->opened ?? 0 ),
+			'total_clicks'           => $total_clicks,
+			'unsubscribes'           => $unsubscribes,
+			'open_rate'              => $sent > 0 ? round( ( (int) $stats->opened / $sent ) * 100, 1 ) : 0,
+			'click_rate'             => $sent > 0 ? round( ( $total_clicks / $sent ) * 100, 1 ) : 0,
+			'top_links'              => $top_links,
+			'opens_timeline'         => $opens_timeline,
+			'countries'              => $countries,
+			'top_locations_by_opens' => $top_locations_by_opens,
+			'recipients'             => $recipient_lists,
 		) );
 	}
 
@@ -474,10 +528,13 @@ class AnalyticsController {
 
 	public function funnel_report( \WP_REST_Request $request ): \WP_REST_Response {
 		global $wpdb;
-		$funnels_table            = $wpdb->prefix . 'aime_funnels';
-		$funnel_sequences_table   = $wpdb->prefix . 'aime_funnel_sequences';
-		$funnel_metrics_table     = $wpdb->prefix . 'aime_funnel_metrics';
-		$funnel_subscribers_table = $wpdb->prefix . 'aime_funnel_subscribers';
+		$p                        = $wpdb->prefix;
+		$funnels_table            = $p . 'aime_funnels';
+		$funnel_sequences_table   = $p . 'aime_funnel_sequences';
+		$funnel_metrics_table     = $p . 'aime_funnel_metrics';
+		$funnel_subscribers_table = $p . 'aime_funnel_subscribers';
+		$subscribers_table        = $p . 'aime_subscribers';
+		$campaign_emails_table    = $p . 'aime_campaign_emails';
 		$id                       = absint( $request->get_param( 'id' ) );
 
 		$funnel = $wpdb->get_row( $wpdb->prepare( 'SELECT * FROM %i WHERE id = %d', $funnels_table, $id ) );
@@ -489,26 +546,118 @@ class AnalyticsController {
 			$wpdb->prepare( 'SELECT * FROM %i WHERE funnel_id = %d ORDER BY sequence ASC', $funnel_sequences_table, $id )
 		);
 
-		// Per-step completions.
-		foreach ( $sequences as &$seq ) {
+		// High-level funnel subscriber counts.
+		$total_subs = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i WHERE funnel_id = %d', $funnel_subscribers_table, $id ) );
+		$active     = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE funnel_id = %d AND status = 'active'", $funnel_subscribers_table, $id ) );
+		$waiting    = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE funnel_id = %d AND status = 'waiting'", $funnel_subscribers_table, $id ) );
+		$completed  = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE funnel_id = %d AND status = 'completed'", $funnel_subscribers_table, $id ) );
+		$cancelled  = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE funnel_id = %d AND status IN ('cancelled', 'failed')", $funnel_subscribers_table, $id ) );
+
+		$completion_rate = $total_subs > 0 ? round( ( $completed / $total_subs ) * 100, 1 ) : 0;
+
+		// Per-step execution analysis, drop-off rates, and email engagement metrics.
+		$prev_step_completed = $total_subs;
+		foreach ( $sequences as $index => &$seq ) {
 			$seq->completed = (int) $wpdb->get_var(
 				$wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE funnel_id = %d AND sequence_id = %d AND status = 'completed'", $funnel_metrics_table, $id, $seq->id )
 			);
 			$seq->failed = (int) $wpdb->get_var(
 				$wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE funnel_id = %d AND sequence_id = %d AND status = 'failed'", $funnel_metrics_table, $id, $seq->id )
 			);
+
+			// Retention rate (% of total audience reached this step).
+			$seq->retention_rate = $total_subs > 0 ? round( ( $seq->completed / $total_subs ) * 100, 1 ) : 0;
+
+			// Step-to-step drop-off.
+			if ( $prev_step_completed > 0 ) {
+				$seq->step_dropoff_pct = round( max( 0, ( 1 - ( $seq->completed / $prev_step_completed ) ) * 100 ), 1 );
+			} else {
+				$seq->step_dropoff_pct = 0;
+			}
+			$prev_step_completed = $seq->completed;
+
+			// For email steps, compute engagement (opens, clicks, and rates).
+			if ( 'send_email' === $seq->action_name ) {
+				$email_stats = $wpdb->get_row(
+					$wpdb->prepare(
+						"SELECT 
+							COUNT(DISTINCT CASE WHEN ce.is_open = 1 THEN fm.subscriber_id END) AS opens,
+							COUNT(DISTINCT CASE WHEN ce.click_counter > 0 THEN fm.subscriber_id END) AS clicks
+						 FROM %i fm
+						 INNER JOIN %i ce 
+							ON ce.subscriber_id = fm.subscriber_id 
+							AND ce.email_type = 'automation'
+							AND ABS(TIMESTAMPDIFF(MINUTE, ce.created_at, fm.created_at)) <= 30
+						 WHERE fm.funnel_id = %d AND fm.sequence_id = %d AND fm.status = 'completed'",
+						$funnel_metrics_table,
+						$campaign_emails_table,
+						$id,
+						$seq->id
+					)
+				);
+
+				$seq->opens      = (int) ( $email_stats->opens ?? 0 );
+				$seq->clicks     = (int) ( $email_stats->clicks ?? 0 );
+				$seq->open_rate  = $seq->completed > 0 ? round( ( $seq->opens / $seq->completed ) * 100, 1 ) : 0;
+				$seq->click_rate = $seq->completed > 0 ? round( ( $seq->clicks / $seq->completed ) * 100, 1 ) : 0;
+			} else {
+				$seq->opens      = null;
+				$seq->clicks     = null;
+				$seq->open_rate  = null;
+				$seq->click_rate = null;
+			}
 		}
 
-		$total_subs = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i WHERE funnel_id = %d', $funnel_subscribers_table, $id ) );
-		$active     = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE funnel_id = %d AND status = 'active'", $funnel_subscribers_table, $id ) );
-		$completed  = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE funnel_id = %d AND status = 'completed'", $funnel_subscribers_table, $id ) );
+		// Recent enrolled subscribers activity (latest 50).
+		$recent_subscribers = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT fs.id, fs.subscriber_id, fs.status, fs.last_sequence_id, fs.next_sequence_id,
+					fs.last_sequence_status, fs.last_executed_time, fs.next_execution_time, fs.created_at,
+					s.email, s.first_name, s.last_name,
+					seq_last.title AS last_step_title, seq_last.action_name AS last_step_action,
+					seq_next.title AS next_step_title, seq_next.action_name AS next_step_action
+				 FROM %i fs
+				 INNER JOIN %i s ON s.id = fs.subscriber_id
+				 LEFT JOIN %i seq_last ON seq_last.id = fs.last_sequence_id
+				 LEFT JOIN %i seq_next ON seq_next.id = fs.next_sequence_id
+				 WHERE fs.funnel_id = %d
+				 ORDER BY fs.id DESC
+				 LIMIT 50",
+				$funnel_subscribers_table,
+				$subscribers_table,
+				$funnel_sequences_table,
+				$funnel_sequences_table,
+				$id
+			)
+		);
+
+		// Daily completions trend (last 14 days).
+		$since_14d = gmdate( 'Y-m-d H:i:s', strtotime( '-14 days' ) );
+		$trend     = $wpdb->get_results(
+			$wpdb->prepare(
+				'SELECT DATE(created_at) AS date, COUNT(*) AS count
+				 FROM %i
+				 WHERE funnel_id = %d AND status = %s AND created_at >= %s
+				 GROUP BY DATE(created_at)
+				 ORDER BY date ASC',
+				$funnel_metrics_table,
+				$id,
+				'completed',
+				$since_14d
+			)
+		);
 
 		return new \WP_REST_Response( array(
-			'funnel'           => $funnel,
-			'sequences'        => $sequences,
-			'total_subscribers' => $total_subs,
-			'active'           => $active,
-			'completed'        => $completed,
+			'funnel'             => $funnel,
+			'sequences'          => $sequences,
+			'total_subscribers'  => $total_subs,
+			'active'             => $active,
+			'waiting'            => $waiting,
+			'completed'          => $completed,
+			'cancelled'          => $cancelled,
+			'completion_rate'    => $completion_rate,
+			'recent_subscribers' => $recent_subscribers ?: array(),
+			'trend'              => $trend ?: array(),
 		) );
 	}
 }

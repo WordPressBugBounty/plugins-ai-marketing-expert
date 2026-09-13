@@ -25,6 +25,7 @@ class AiSocialService {
 		'facebook'  => 63206,
 		'instagram' => 2200,
 		'x'         => 280,
+		'linkedin'  => 3000,
 	);
 
 	/**
@@ -122,6 +123,12 @@ class AiSocialService {
 			case 'instagram':
 				return sprintf(
 					"Write for Instagram as a caption under %d characters. Make it visually readable with short sentences or line breaks if useful, but no hashtags.",
+					$char_limit
+				);
+
+			case 'linkedin':
+				return sprintf(
+					"Write for LinkedIn as an insightful, professional post under %d characters. Use engaging paragraph breaks, an authoritative yet conversational tone, and a thought-provoking takeaway.",
 					$char_limit
 				);
 

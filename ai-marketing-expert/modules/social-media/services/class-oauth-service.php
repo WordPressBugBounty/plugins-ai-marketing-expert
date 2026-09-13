@@ -177,6 +177,21 @@ class OAuthService {
 					'message' => __( 'X (Twitter) manual mode uses API keys directly. Use the manual connect form.', 'ai-marketing-expert' ),
 				);
 
+			case 'linkedin':
+				$client_id = $settings['linkedin_client_id'] ?? '';
+				if ( empty( $client_id ) ) {
+					return array( 'success' => false, 'message' => __( 'LinkedIn Client ID not configured.', 'ai-marketing-expert' ) );
+				}
+				$scopes = 'openid,profile,w_member_social,email';
+				$url    = add_query_arg( array(
+					'response_type' => 'code',
+					'client_id'     => $client_id,
+					'redirect_uri'  => rawurlencode( $callback ),
+					'state'         => $state,
+					'scope'         => $scopes,
+				), 'https://www.linkedin.com/oauth/v2/authorization' );
+				return array( 'success' => true, 'url' => $url );
+
 			default:
 				return array( 'success' => false, 'message' => __( 'Unsupported platform.', 'ai-marketing-expert' ) );
 		}
@@ -199,6 +214,35 @@ class OAuthService {
 				) );
 				return $this->parse_facebook_token_response( $response, $platform );
 
+			case 'linkedin':
+				$client_id     = $settings['linkedin_client_id'] ?? '';
+				$client_secret = $settings['linkedin_client_secret'] ?? '';
+				$response      = wp_remote_post( 'https://www.linkedin.com/oauth/v2/accessToken', array(
+					'timeout' => 30,
+					'headers' => array( 'Content-Type' => 'application/x-www-form-urlencoded' ),
+					'body'    => array(
+						'grant_type'    => 'authorization_code',
+						'code'          => $code,
+						'redirect_uri'  => $callback,
+						'client_id'     => $client_id,
+						'client_secret' => $client_secret,
+					),
+				) );
+				if ( is_wp_error( $response ) ) {
+					return array( 'success' => false, 'message' => $response->get_error_message() );
+				}
+				$body = json_decode( wp_remote_retrieve_body( $response ), true );
+				if ( empty( $body['access_token'] ) ) {
+					return array( 'success' => false, 'message' => $body['error_description'] ?? __( 'Failed to exchange LinkedIn authorization code.', 'ai-marketing-expert' ) );
+				}
+				$expires_in = (int) ( $body['expires_in'] ?? 5184000 );
+				return array(
+					'success'       => true,
+					'access_token'  => $body['access_token'],
+					'refresh_token' => $body['refresh_token'] ?? '',
+					'expires_at'    => gmdate( 'Y-m-d H:i:s', time() + $expires_in ),
+				);
+
 			default:
 				return array( 'success' => false, 'message' => __( 'Unsupported platform for manual token exchange.', 'ai-marketing-expert' ) );
 		}
@@ -217,6 +261,34 @@ class OAuthService {
 					'fb_exchange_token' => $refresh_token,
 				), 'https://graph.facebook.com/v25.0/oauth/access_token' ), array( 'timeout' => 30 ) );
 				return $this->parse_facebook_token_response( $response, $platform );
+
+			case 'linkedin':
+				$client_id     = $settings['linkedin_client_id'] ?? '';
+				$client_secret = $settings['linkedin_client_secret'] ?? '';
+				$response      = wp_remote_post( 'https://www.linkedin.com/oauth/v2/accessToken', array(
+					'timeout' => 30,
+					'headers' => array( 'Content-Type' => 'application/x-www-form-urlencoded' ),
+					'body'    => array(
+						'grant_type'    => 'refresh_token',
+						'refresh_token' => $refresh_token,
+						'client_id'     => $client_id,
+						'client_secret' => $client_secret,
+					),
+				) );
+				if ( is_wp_error( $response ) ) {
+					return array( 'success' => false, 'message' => $response->get_error_message() );
+				}
+				$body = json_decode( wp_remote_retrieve_body( $response ), true );
+				if ( empty( $body['access_token'] ) ) {
+					return array( 'success' => false, 'message' => $body['error_description'] ?? __( 'Failed to refresh LinkedIn token.', 'ai-marketing-expert' ) );
+				}
+				$expires_in = (int) ( $body['expires_in'] ?? 5184000 );
+				return array(
+					'success'       => true,
+					'access_token'  => $body['access_token'],
+					'refresh_token' => $body['refresh_token'] ?? $refresh_token,
+					'expires_at'    => gmdate( 'Y-m-d H:i:s', time() + $expires_in ),
+				);
 
 			default:
 				return array( 'success' => false, 'message' => __( 'Token refresh not supported for this platform in manual mode.', 'ai-marketing-expert' ) );
@@ -309,10 +381,12 @@ class OAuthService {
 			'x_api_secret'         => '',
 			'x_access_token'       => '',
 			'x_access_secret'      => '',
+			'linkedin_client_id'   => '',
+			'linkedin_client_secret' => '',
 		);
 		$settings = wp_parse_args( get_option( 'aime_social-media_settings', array() ), $defaults );
 
-		foreach ( array( 'facebook_app_secret', 'instagram_app_secret', 'x_api_secret', 'x_access_token', 'x_access_secret' ) as $key ) {
+		foreach ( array( 'facebook_app_secret', 'instagram_app_secret', 'x_api_secret', 'x_access_token', 'x_access_secret', 'linkedin_client_secret' ) as $key ) {
 			if ( ! empty( $settings[ $key ] ) ) {
 				$decrypted = Encryption::decrypt( $settings[ $key ] );
 				$settings[ $key ] = '' !== $decrypted ? $decrypted : $settings[ $key ];

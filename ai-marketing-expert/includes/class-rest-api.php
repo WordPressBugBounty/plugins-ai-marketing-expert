@@ -182,6 +182,61 @@ class RestApi {
 			)
 		);
 
+		// GET|POST /aime/v1/system/cron-runner - Public external server cron runner (token auth).
+		register_rest_route(
+			$namespace,
+			'/system/cron-runner',
+			array(
+				'methods'             => array( 'GET', 'POST' ),
+				'callback'            => array( $this, 'run_external_cron' ),
+				'permission_callback' => '__return_true',
+			)
+		);
+
+		// POST /aime/v1/system/cron-token/regenerate - Generate a new external cron token.
+		register_rest_route(
+			$namespace,
+			'/system/cron-token/regenerate',
+			array(
+				'methods'             => \WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'regenerate_cron_token' ),
+				'permission_callback' => array( $this, 'admin_permission_check' ),
+			)
+		);
+
+		// POST /aime/v1/system/test-imap - Test IMAP bounce mailbox connection.
+		register_rest_route(
+			$namespace,
+			'/system/test-imap',
+			array(
+				'methods'             => \WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'test_imap_connection' ),
+				'permission_callback' => array( $this, 'admin_permission_check' ),
+			)
+		);
+
+		// POST /aime/v1/system/prune-database - Clean up old database records now.
+		register_rest_route(
+			$namespace,
+			'/system/prune-database',
+			array(
+				'methods'             => \WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'prune_database' ),
+				'permission_callback' => array( $this, 'admin_permission_check' ),
+			)
+		);
+
+		// GET /aime/v1/system/database-hygiene - Get database hygiene and prune stats.
+		register_rest_route(
+			$namespace,
+			'/system/database-hygiene',
+			array(
+				'methods'             => \WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'get_database_hygiene' ),
+				'permission_callback' => array( $this, 'admin_permission_check' ),
+			)
+		);
+
 		// GET /aime/v1/pro/status - Pro license status.
 		register_rest_route(
 			$namespace,
@@ -523,6 +578,133 @@ class RestApi {
 	}
 
 	/**
+	 * Run external server-level cron worker.
+	 *
+	 * @param \WP_REST_Request $request Request.
+	 * @return \WP_REST_Response
+	 */
+	public function run_external_cron( \WP_REST_Request $request ): \WP_REST_Response {
+		$token    = sanitize_text_field( $request->get_param( 'token' ) ?: ( $request->get_header( 'x-cron-token' ) ?: '' ) );
+		$expected = get_option( 'aime_cron_secret_token' );
+		if ( empty( $expected ) ) {
+			$expected = wp_generate_password( 32, false );
+			update_option( 'aime_cron_secret_token', $expected, false );
+		}
+
+		if ( empty( $token ) || ! hash_equals( (string) $expected, (string) $token ) ) {
+			return new \WP_REST_Response(
+				array( 'status' => 'error', 'message' => __( 'Invalid or missing cron token.', 'ai-marketing-expert' ) ),
+				403
+			);
+		}
+
+		@set_time_limit( 120 );
+
+		do_action( 'aime_minutely_tasks' );
+		do_action( 'aime_process_email_queue' );
+		do_action( 'aime_process_automations' );
+		do_action( 'aime_process_bounce_mailbox' );
+
+		return new \WP_REST_Response(
+			array(
+				'status'      => 'success',
+				'message'     => __( 'Background cron queues dispatched successfully.', 'ai-marketing-expert' ),
+				'executed_at' => current_time( 'mysql', true ),
+			),
+			200
+		);
+	}
+
+	/**
+	 * POST /system/cron-token/regenerate - Generate a new external cron token.
+	 */
+	public function regenerate_cron_token( \WP_REST_Request $request ): \WP_REST_Response {
+		$new_token = wp_generate_password( 32, false );
+		update_option( 'aime_cron_secret_token', $new_token, false );
+
+		$cron_url = rest_url( aime_rest_namespace() . '/system/cron-runner?token=' . $new_token );
+
+		return new \WP_REST_Response(
+			array(
+				'message'          => __( 'New cron token generated.', 'ai-marketing-expert' ),
+				'cron_token'       => $new_token,
+				'cron_runner_url'  => $cron_url,
+				'cron_cli_command' => sprintf( 'wget -q -O - "%s" >/dev/null 2>&1', $cron_url ),
+			)
+		);
+	}
+
+	/**
+	 * POST /system/test-imap - Test IMAP bounce mailbox connection.
+	 */
+	public function test_imap_connection( \WP_REST_Request $request ): \WP_REST_Response {
+		$params = $request->get_json_params() ?? array();
+		if ( empty( $params['password'] ) ) {
+			$saved = get_option( 'aime_bounce_imap_settings', array() );
+			if ( ! empty( $saved['password'] ) ) {
+				$params['password'] = Encryption::decrypt( $saved['password'] );
+			}
+		}
+
+		$test = ImapBounceService::test_connection( $params );
+
+		return new \WP_REST_Response( $test, $test['success'] ? 200 : 400 );
+	}
+
+	/**
+	 * GET /system/database-hygiene - Get database hygiene & prune stats.
+	 *
+	 * @param \WP_REST_Request $request Request object.
+	 * @return \WP_REST_Response
+	 */
+	public function get_database_hygiene( \WP_REST_Request $request ): \WP_REST_Response {
+		$stats = aime_get_database_hygiene_stats();
+		return new \WP_REST_Response( $stats );
+	}
+
+	/**
+	 * POST /system/prune-database - Clean up old database records now.
+	 *
+	 * @param \WP_REST_Request $request Request object.
+	 * @return \WP_REST_Response
+	 */
+	public function prune_database( \WP_REST_Request $request ): \WP_REST_Response {
+		try {
+			$params     = $request->get_json_params() ?? array();
+			$days       = isset( $params['retention_days'] ) ? (int) $params['retention_days'] : -1;
+			$force_logs = ! empty( $params['force_logs'] );
+			$res        = aime_run_database_prune( $days, $force_logs );
+			$total      = $res['total_pruned'] ?? 0;
+
+			$message = $total > 0
+				? sprintf(
+					/* translators: %d: count of deleted records */
+					__( 'Database pruning completed: %d old records removed.', 'ai-marketing-expert' ),
+					$total
+				)
+				: __( 'Database is already clean and optimal. No records older than retention period were found.', 'ai-marketing-expert' );
+
+			return new \WP_REST_Response(
+				array(
+					'success' => true,
+					'message' => $message,
+					'deleted' => $res['details'] ?? array(),
+					'details' => $res,
+					'stats'   => aime_get_database_hygiene_stats(),
+				)
+			);
+		} catch ( \Throwable $e ) {
+			return new \WP_REST_Response(
+				array(
+					'success' => false,
+					'message' => $e->getMessage(),
+				),
+				500
+			);
+		}
+	}
+
+	/**
 	 * GET /settings - Get global settings.
 	 *
 	 * @param \WP_REST_Request $request Request object.
@@ -541,6 +723,7 @@ class RestApi {
 			'batch_interval'   => 60,
 			'gdpr_enabled'     => true,
 			'delete_data_on_uninstall' => false,
+			'retention_days'   => 60,
 		);
 		$settings = wp_parse_args( aime_get_db_option( 'aime_settings', array() ), $defaults );
 
@@ -557,6 +740,32 @@ class RestApi {
 
 		// Include the webhook URL for display.
 		$settings['webhook_url'] = rest_url( aime_rest_namespace() . '/email/webhook/subscribe' );
+
+		// External Cron details.
+		$cron_token = get_option( 'aime_cron_secret_token' );
+		if ( empty( $cron_token ) ) {
+			$cron_token = wp_generate_password( 32, false );
+			update_option( 'aime_cron_secret_token', $cron_token, false );
+		}
+		$settings['cron_token']       = $cron_token;
+		$settings['cron_runner_url']  = rest_url( aime_rest_namespace() . '/system/cron-runner?token=' . $cron_token );
+		$settings['cron_cli_command'] = sprintf( 'wget -q -O - "%s" >/dev/null 2>&1', $settings['cron_runner_url'] );
+
+		// Webhook bounce & complaint URLs for ESP feedback loops.
+		$settings['webhook_bounce_url']    = rest_url( aime_rest_namespace() . '/email/webhook/bounce?token=' . $cron_token );
+		$settings['webhook_complaint_url'] = rest_url( aime_rest_namespace() . '/email/webhook/complaint?token=' . $cron_token );
+
+		// IMAP bounce mailbox settings.
+		$imap_saved = get_option( 'aime_bounce_imap_settings', array() );
+		$settings['bounce_imap'] = array(
+			'enabled'              => ! empty( $imap_saved['enabled'] ),
+			'host'                 => $imap_saved['host'] ?? '',
+			'port'                 => absint( $imap_saved['port'] ?? 993 ),
+			'encryption'           => $imap_saved['encryption'] ?? 'ssl',
+			'username'             => $imap_saved['username'] ?? '',
+			'delete_after_process' => ! empty( $imap_saved['delete_after_process'] ),
+			'has_password'         => ! empty( $imap_saved['password'] ),
+		);
 
 		return new \WP_REST_Response( array( 'settings' => $settings ) );
 	}
@@ -589,6 +798,7 @@ class RestApi {
 			'gdpr_enabled',
 			'delete_data_on_uninstall',
 			'unsubscribe_page',
+			'retention_days',
 		);
 
 		foreach ( $allowed as $key ) {
@@ -599,6 +809,29 @@ class RestApi {
 
 		if ( isset( $params['double_optin'] ) ) {
 			update_option( 'aime_double_optin', (bool) $settings['double_optin'], false );
+		}
+
+		// Save IMAP bounce settings.
+		if ( isset( $params['bounce_imap'] ) && is_array( $params['bounce_imap'] ) ) {
+			$imap_in    = $params['bounce_imap'];
+			$imap_saved = get_option( 'aime_bounce_imap_settings', array() );
+
+			$imap_to_save = array(
+				'enabled'              => ! empty( $imap_in['enabled'] ),
+				'host'                 => sanitize_text_field( $imap_in['host'] ?? '' ),
+				'port'                 => absint( $imap_in['port'] ?? 993 ),
+				'encryption'           => sanitize_text_field( $imap_in['encryption'] ?? 'ssl' ),
+				'username'             => sanitize_text_field( $imap_in['username'] ?? '' ),
+				'delete_after_process' => ! empty( $imap_in['delete_after_process'] ),
+			);
+
+			if ( ! empty( $imap_in['password'] ) ) {
+				$imap_to_save['password'] = Encryption::encrypt( $imap_in['password'] );
+			} elseif ( ! empty( $imap_saved['password'] ) ) {
+				$imap_to_save['password'] = $imap_saved['password'];
+			}
+
+			update_option( 'aime_bounce_imap_settings', $imap_to_save, false );
 		}
 
 		update_option( 'aime_settings', $settings, false );
@@ -858,6 +1091,9 @@ class RestApi {
 
 			case 'unsubscribe_page':
 				return absint( $value );
+
+			case 'retention_days':
+				return in_array( (int) $value, array( 0, 30, 60, 90, 180, 365 ), true ) ? (int) $value : 60;
 
 			case 'double_optin':
 			case 'track_opens':

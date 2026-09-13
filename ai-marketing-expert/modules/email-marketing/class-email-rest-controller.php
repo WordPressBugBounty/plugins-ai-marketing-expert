@@ -277,6 +277,66 @@ class EmailRestController {
 				'emails' => array( 'type' => 'array', 'default' => array(), 'items' => array( 'type' => 'string' ) ),
 			),
 		) );
+
+		// GET /email/leads/search (admin)
+		register_rest_route( $this->ns, '/email/leads/search', array(
+			'methods'             => 'GET',
+			'callback'            => array( $c, 'search_leads' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+			'args'                => array(
+				'industry'     => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+				'role'         => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+				'location'     => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+				'company_size' => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+				'keyword'      => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+				'limit'        => array( 'type' => 'integer', 'default' => 10, 'sanitize_callback' => 'absint' ),
+			),
+		) );
+
+		// POST /email/leads/import (admin)
+		register_rest_route( $this->ns, '/email/leads/import', array(
+			'methods'             => 'POST',
+			'callback'            => array( $c, 'import_leads' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+			'args'                => array(
+				'leads'     => array( 'type' => 'array', 'required' => true ),
+				'list_id'   => array( 'type' => 'integer', 'default' => 0, 'sanitize_callback' => 'absint' ),
+				'tag_names' => array( 'type' => 'array', 'default' => array() ),
+			),
+		) );
+
+		// GET /email/leads/autopilot (admin)
+		register_rest_route( $this->ns, '/email/leads/autopilot', array(
+			'methods'             => 'GET',
+			'callback'            => array( $c, 'get_autopilot_config' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+		) );
+
+		// POST /email/leads/autopilot (admin)
+		register_rest_route( $this->ns, '/email/leads/autopilot', array(
+			'methods'             => 'POST',
+			'callback'            => array( $c, 'save_autopilot_config' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+			'args'                => array(
+				'enabled'        => array( 'type' => 'boolean', 'default' => false ),
+				'mode'           => array( 'type' => 'string', 'default' => 'filters', 'enum' => array( 'filters', 'prompt' ) ),
+				'industry'       => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+				'role'           => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+				'location'       => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+				'company_size'   => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+				'keyword'        => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+				'prompt'         => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_textarea_field' ),
+				'daily_target'   => array( 'type' => 'integer', 'default' => 25, 'sanitize_callback' => 'absint' ),
+				'target_list_id' => array( 'type' => 'integer', 'default' => 0, 'sanitize_callback' => 'absint' ),
+			),
+		) );
+
+		// POST /email/leads/autopilot/run (admin)
+		register_rest_route( $this->ns, '/email/leads/autopilot/run', array(
+			'methods'             => 'POST',
+			'callback'            => array( $c, 'run_autopilot' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+		) );
 	}
 
 	/* ══════════════════════════════════════════════════════
@@ -693,6 +753,13 @@ class EmailRestController {
 
 		// GET /email/analytics/automations/{id}
 		register_rest_route( $this->ns, '/email/analytics/automations/(?P<id>\d+)', array(
+			'methods'             => 'GET',
+			'callback'            => array( $c, 'funnel_report' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+		) );
+
+		// GET /email/analytics/funnels/{id} (alias for compatibility)
+		register_rest_route( $this->ns, '/email/analytics/funnels/(?P<id>\d+)', array(
 			'methods'             => 'GET',
 			'callback'            => array( $c, 'funnel_report' ),
 			'permission_callback' => array( $this, 'admin_permission' ),

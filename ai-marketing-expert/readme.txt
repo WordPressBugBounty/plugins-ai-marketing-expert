@@ -1,6 +1,6 @@
-=== AI Marketing Expert — AI Email Marketing, Content Generator, SEO Analyzer, Workflow Automation, Social Media & Ai Chatbot ===
+=== AI Marketing Expert — AI Email Marketing, AI Content Generator, SEO Analyzer, AI Workflow Automation, Social Media & Ai Chatbot ===
 Contributors: nalam
-Tags: ai marketing, email marketing, ai content generator, ai chatbot, seo analyzer
+Tags: email marketing, lead finder, ai marketing, b2b leads, ai chatbot
 Requires at least: 6.2
 Tested up to: 7.1
 Requires PHP: 8.0
@@ -8,11 +8,11 @@ Stable tag: trunk
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-All-in-one AI marketing: AI email campaigns, AI content generation,  AI SEO analyzer, social media scheduling, AI chatbot, and AI workflow automation.
+All-in-one AI marketing: Email campaigns, AI content generator, AI SEO analyzer, social scheduling, AI chatbot, AI workflows, and AI B2B lead finder.
 
 == Description ==
 
-**AI Marketing Expert** is the most complete AI-powered marketing suite for WordPress. Instead of paying for Mailchimp, Jasper, Semrush, Hootsuite, Intercom, and Zapier separately, you get all six — email marketing, content generation, SEO, social media, a live AI chatbot, and workflow automation — built right into your WordPress admin.
+**AI Marketing Expert** is the most complete AI-powered marketing suite for WordPress. Instead of paying for Apollo/Hunter, Mailchimp, Jasper, Semrush, Hootsuite, Intercom, and Zapier separately, you get all in one place — B2B lead finder, email marketing, content generation, SEO, social media, a live AI chatbot, and workflow automation — built right into your WordPress admin.
 
 Powered by your choice of leading AI models (ChatGPT, Claude, Gemini, or OpenRouter), every module is designed to save you hours every week and help you grow your audience consistently without burnout.
 
@@ -42,7 +42,15 @@ Whether you are a blogger, a small business owner, a WooCommerce store, or a fre
 
 = 📧 Email Marketing (Free + Pro) =
 
-A complete email CRM and campaign system built inside WordPress — no Mailchimp account needed.
+A complete email CRM, cold outreach, and campaign system built inside WordPress — no Mailchimp or external lead generation subscriptions needed.
+
+**🎯 B2B Lead Finder & Autopilot Pipeline (NEW in 1.2.5)**
+
+* **Instant Prospect Search** — Find verified B2B leads by job title/role (CEO, Founder, CMO, Sales Lead), industry, location, and company size.
+* **1-Click Lead Collection** — Collect discovered prospects directly into your verified subscriber lists with a single click.
+* **Autopilot Pipeline** — Set your ideal customer criteria once and let the automated engine find, verify, and import fresh high-converting leads on autopilot.
+* **Built-in Email Validation** — Automatic syntax and domain MX deliverability verification before adding to lists to safeguard sender reputation.
+* **Cold Outreach Ready** — Pipe collected leads immediately into cold outreach campaigns and multi-step automated email nurture funnels.
 
 **Subscriber Management**
 
@@ -129,9 +137,10 @@ AI-powered SEO intelligence and on-page optimization without leaving WordPress. 
 
 = 📱 Social Media Scheduler (Free + Pro) =
 
-Schedule and publish AI-generated social posts to Facebook, Instagram, and X/Twitter directly from WordPress.
+Schedule and publish AI-generated social posts to Facebook, Instagram, LinkedIn, and X/Twitter directly from WordPress.
 
-* Connect accounts via OAuth (Facebook, Instagram, X/Twitter)
+* Connect accounts via OAuth (Facebook, Instagram, LinkedIn, X/Twitter)
+* Auto-share on publish — automatically generate and schedule AI social posts when a blog post or WooCommerce product is published
 * Compose and publish to one or multiple accounts simultaneously
 * AI caption generation optimized per platform
 * AI hashtag suggestions
@@ -343,11 +352,25 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 
 == Changelog ==
 
+= 1.2.5 =
+* New: B2B Lead Finder & Autopilot Pipeline — Discover, filter, and extract high-converting B2B prospects by role, industry, location, and company size with 1-click list collection and recurring autopilot sync.
+* New: LinkedIn Publishing & OAuth — Connect LinkedIn personal and organization accounts to schedule and publish AI-generated business updates and articles directly.
+* New: Social Auto-Share on Publish — Automatically generate tailored AI captions and schedule social posts across connected channels whenever a blog post or WooCommerce product is published.
+* New: 1-Click direct deep linking from the WordPress dashboard widget into specific AI Chatbot conversation threads.
+* New: Interactive "Take Over" action link directly inside the conversation view notice to immediately enable human agent takeover.
+* Improved: Chatbot conversation list table now features clickable visitor links and full row cursor affordances.
+* Fixed: Sidebar navigation now properly maintains the active state on "Conversations" when navigating into a single conversation.
+* New: Built-in IMAP bounce processing service for automated email marketing deliverability and list hygiene.
+* Improved: Lead Finder UX with responsive search filters, clean custom query layout, and direct Cold Outreach funnel integration.
+* Improved: Database Hygiene & Pruning now uses accessible in-app modal dialogs instead of browser confirm prompts with accurate record count reporting.
+* Improved: Added Send Email action support within Workflow Automation.
+
 = 1.2.4 =
 * Fixed: React crash (Minified React Error #31) on the Subscribers page when tags or list objects contained non-string elements.
 * Fixed: Webhook subscriber rate limiting now allows authenticated API key requests without hitting false 429 errors during bulk syncs or external integration imports.
 * Improved: Defensive pivot data resolution in subscriber REST API to skip orphaned or malformed tag and list relations.
 * Improved: Added `aime_webhook_rate_limit` filter for customizable webhook rate limits.
+* Compatibility: Tested up to WordPress 7.1.
 
 = 1.2.3 =
 * New: AI Brain Skills — reusable rule blocks (SEO Strategist, Readability Coach free; Image Director, Link Planner, WordPress Expert, Social Hook Writer plus custom skills on Pro) merged into the strategist prompt; Skill library popup and per-workflow selection.
@@ -421,6 +444,9 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 * React-based unified admin dashboard
 
 == Upgrade Notice ==
+
+= 1.2.5 =
+Major Release: Brand new B2B Lead Finder & Autopilot Pipeline to discover and collect verified leads automatically, plus Dashboard widget 1-click chatbot deep links, inline human takeover shortcuts, IMAP bounce handling, and database maintenance improvements. Highly recommended for all users.
 
 = 1.2.4 =
 Subscribers dashboard fix, improved webhook rate limiting for reliable bulk syncs and integrations, and compatibility testing for WordPress 7.1. Recommended for all users.

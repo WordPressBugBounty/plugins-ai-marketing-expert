@@ -285,27 +285,57 @@ class EmailValidator {
 	 */
 	public static function has_mailable_domain( string $domain ): bool {
 		$domain = strtolower( trim( $domain ) );
-		if ( '' === $domain ) {
+		if ( false !== strpos( $domain, '@' ) ) {
+			$parts  = explode( '@', $domain );
+			$domain = (string) array_pop( $parts );
+		}
+		if ( '' === $domain || strpos( $domain, '.' ) === false ) {
 			return false;
 		}
 
-		// checkdnsrr can be slow; cache results for 1 hour.
+		// Well-known valid mail providers — bypass DNS query for instant validation.
+		$known_mail_providers = array(
+			'gmail.com', 'googlemail.com', 'yahoo.com', 'hotmail.com', 'outlook.com',
+			'live.com', 'msn.com', 'icloud.com', 'me.com', 'mac.com', 'aol.com',
+			'zoho.com', 'proton.me', 'protonmail.com', 'mail.com', 'gmx.com',
+			'yandex.com', 'fastmail.com',
+		);
+		if ( in_array( $domain, $known_mail_providers, true ) ) {
+			return true;
+		}
+
+		// Cache results (24h for valid, 1h for invalid).
 		$cache_key = 'aime_mx_' . md5( $domain );
-		$cached    = get_transient( $cache_key );
-		if ( false !== $cached ) {
-			return (bool) $cached;
+		if ( function_exists( 'get_transient' ) ) {
+			$cached = get_transient( $cache_key );
+			if ( false !== $cached ) {
+				return 'valid' === $cached;
+			}
 		}
 
-		$has_mx = checkdnsrr( $domain, 'MX' );
-
-		// If no MX, also check for A record (some domains accept mail via A record).
-		if ( ! $has_mx ) {
-			$has_mx = checkdnsrr( $domain, 'A' );
+		$has_mx = false;
+		if ( function_exists( 'checkdnsrr' ) ) {
+			$has_mx = checkdnsrr( $domain, 'MX' );
+			if ( ! $has_mx ) {
+				$has_mx = checkdnsrr( $domain, 'A' );
+			}
+		} elseif ( function_exists( 'dns_get_record' ) ) {
+			$mx_records = @dns_get_record( $domain, DNS_MX );
+			$has_mx     = ! empty( $mx_records );
+			if ( ! $has_mx ) {
+				$a_records = @dns_get_record( $domain, DNS_A );
+				$has_mx    = ! empty( $a_records );
+			}
+		} else {
+			$has_mx = true; // Fail open if no DNS functions available.
 		}
 
-		set_transient( $cache_key, $has_mx ? 1 : 0, HOUR_IN_SECONDS );
+		if ( function_exists( 'set_transient' ) ) {
+			$ttl = defined( 'DAY_IN_SECONDS' ) ? ( $has_mx ? DAY_IN_SECONDS : HOUR_IN_SECONDS ) : 86400;
+			set_transient( $cache_key, $has_mx ? 'valid' : 'invalid', $ttl );
+		}
 
-		return $has_mx;
+		return (bool) $has_mx;
 	}
 
 	/**

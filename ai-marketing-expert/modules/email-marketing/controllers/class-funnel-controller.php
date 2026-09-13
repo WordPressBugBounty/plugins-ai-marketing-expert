@@ -42,15 +42,56 @@ class FunnelController {
 		$total = (int) $wpdb->get_var( empty( $params_c ) ? "SELECT COUNT(*) FROM {$p}aime_funnels WHERE {$where_sql}" : $wpdb->prepare( "SELECT COUNT(*) FROM {$p}aime_funnels WHERE {$where_sql}", ...$params_c ) ); // phpcs:ignore
 		$items = $wpdb->get_results( $wpdb->prepare( "SELECT * FROM {$p}aime_funnels WHERE {$where_sql} ORDER BY id DESC LIMIT %d OFFSET %d", ...$params ) ); // phpcs:ignore
 
-		// Attach subscriber count per funnel.
-		foreach ( $items as &$item ) {
-			$item->subscribers_count = (int) $wpdb->get_var(
-				$wpdb->prepare( "SELECT COUNT(*) FROM {$p}aime_funnel_subscribers WHERE funnel_id = %d", $item->id )
+		// Attach subscriber and sequence metrics per funnel in high-performance batch queries.
+		if ( ! empty( $items ) ) {
+			$ids             = array_map( 'absint', wp_list_pluck( $items, 'id' ) );
+			$id_placeholders = implode( ',', array_fill( 0, count( $ids ), '%d' ) );
+
+			// Funnel sequences counts.
+			$seq_counts = $wpdb->get_results(
+				$wpdb->prepare( "SELECT funnel_id, COUNT(*) as cnt FROM {$p}aime_funnel_sequences WHERE funnel_id IN ({$id_placeholders}) GROUP BY funnel_id", ...$ids ), // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				OBJECT_K
 			);
-			$item->sequences_count = (int) $wpdb->get_var(
-				$wpdb->prepare( "SELECT COUNT(*) FROM {$p}aime_funnel_sequences WHERE funnel_id = %d", $item->id )
+
+			// Funnel subscribers stats.
+			$sub_stats = $wpdb->get_results(
+				$wpdb->prepare(
+					"SELECT funnel_id,
+						COUNT(*) as enrolled,
+						SUM(CASE WHEN status IN ('active', 'waiting') THEN 1 ELSE 0 END) as active,
+						SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed
+					 FROM {$p}aime_funnel_subscribers
+					 WHERE funnel_id IN ({$id_placeholders})
+					 GROUP BY funnel_id",
+					...$ids
+				), // phpcs:ignore WordPress.DB.PreparedSQL.InterpolatedNotPrepared
+				OBJECT_K
 			);
+
+			foreach ( $items as &$item ) {
+				$fid       = (int) $item->id;
+				$enrolled  = isset( $sub_stats[ $fid ] ) ? (int) $sub_stats[ $fid ]->enrolled : 0;
+				$active    = isset( $sub_stats[ $fid ] ) ? (int) $sub_stats[ $fid ]->active : 0;
+				$completed = isset( $sub_stats[ $fid ] ) ? (int) $sub_stats[ $fid ]->completed : 0;
+				$seq_cnt   = isset( $seq_counts[ $fid ] ) ? (int) $seq_counts[ $fid ]->cnt : 0;
+
+				$item->enrolled_count    = $enrolled;
+				$item->active_count      = $active;
+				$item->completed_count   = $completed;
+				$item->completion_rate   = $enrolled > 0 ? round( ( $completed / $enrolled ) * 100, 1 ) : 0;
+				$item->subscribers_count = $enrolled;
+				$item->sequences_count   = $seq_cnt;
+			}
 		}
+
+		// Overview totals across all funnels for dashboard cards.
+		$overview = array(
+			'total_automations'     => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$p}aime_funnels" ),
+			'published_automations' => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$p}aime_funnels WHERE status = 'published'" ),
+			'total_enrolled'        => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$p}aime_funnel_subscribers" ),
+			'total_active'          => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$p}aime_funnel_subscribers WHERE status IN ('active', 'waiting')" ),
+			'total_completed'       => (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$p}aime_funnel_subscribers WHERE status = 'completed'" ),
+		);
 
 		return new \WP_REST_Response( array(
 			'items'    => $items,
@@ -58,6 +99,7 @@ class FunnelController {
 			'page'     => $page,
 			'per_page' => $per_page,
 			'pages'    => (int) ceil( $total / $per_page ),
+			'overview' => $overview,
 		) );
 	}
 

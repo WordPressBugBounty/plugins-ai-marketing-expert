@@ -76,6 +76,7 @@ class FunnelProcessor {
 				}
 
 				$this->execute_for_subscriber( $row );
+				usleep( 100000 ); // 100ms throttle between subscriber steps to prevent SMTP bursting.
 			}
 		}
 	}
@@ -86,6 +87,17 @@ class FunnelProcessor {
 	public function trigger( int $funnel_id, int $subscriber_id ): void {
 		global $wpdb;
 		$p = $wpdb->prefix;
+
+		// Verify the subscriber exists and is actively subscribed.
+		$sub_status = $wpdb->get_var(
+			$wpdb->prepare(
+				"SELECT status FROM {$p}aime_subscribers WHERE id = %d",
+				$subscriber_id
+			)
+		);
+		if ( 'subscribed' !== $sub_status ) {
+			return;
+		}
 
 		// Don't duplicate.
 		$exists = $wpdb->get_var(
@@ -324,14 +336,16 @@ class FunnelProcessor {
 
 		// Merge tags (escape values for HTML context).
 		$replace = array(
-			'{{first_name}}'      => esc_html( $row->first_name ?? '' ),
-			'{{last_name}}'       => esc_html( $row->last_name ?? '' ),
-			'{{full_name}}'       => esc_html( trim( ( $row->first_name ?? '' ) . ' ' . ( $row->last_name ?? '' ) ) ),
-			'{{email}}'           => esc_html( $row->email ?? '' ),
-			'{{site_name}}'       => esc_html( get_bloginfo( 'name' ) ),
-			'{{site_url}}'        => esc_url( home_url() ),
-			'{{unsubscribe}}'     => esc_url( $unsub_url ),
-			'{{unsubscribe_url}}' => esc_url( $unsub_url ),
+			'{{first_name}}'          => esc_html( $row->first_name ?? '' ),
+			'{{last_name}}'           => esc_html( $row->last_name ?? '' ),
+			'{{full_name}}'           => esc_html( trim( ( $row->first_name ?? '' ) . ' ' . ( $row->last_name ?? '' ) ) ),
+			'{{email}}'               => esc_html( $row->email ?? '' ),
+			'{{site_name}}'           => esc_html( get_bloginfo( 'name' ) ),
+			'{{site_url}}'            => esc_url( home_url() ),
+			'{{unsubscribe}}'         => esc_url( $unsub_url ),
+			'{{unsubscribe_url}}'     => esc_url( $unsub_url ),
+			'{{company_name}}'        => esc_html( get_option( 'aime_company_name', get_bloginfo( 'name' ) ) ),
+			'{{company_address}}'     => esc_html( get_option( 'aime_company_address', '' ) ),
 		);
 		$subject = str_replace( array_keys( $replace ), array_values( $replace ), $subject );
 		$body    = str_replace( array_keys( $replace ), array_values( $replace ), $body );
@@ -342,6 +356,7 @@ class FunnelProcessor {
 			'subscriber_status' => $row->sub_status ?? 'subscribed',
 			'email_hash'        => $email_hash,
 		);
+
 		$body = $this->append_footer( $body, $email_context );
 		$body = $this->inject_tracking( $body, $email_context );
 
@@ -362,6 +377,14 @@ class FunnelProcessor {
 
 		if ( null === $sent ) {
 			return null;
+		}
+
+		if ( false === $sent ) {
+			// If recipient was marked bounced (e.g. 5xx rejection), exit funnel immediately.
+			$cur_status = $wpdb->get_var( $wpdb->prepare( "SELECT status FROM {$p}aime_subscribers WHERE id = %d", $row->subscriber_id ) );
+			if ( 'bounced' === $cur_status ) {
+				$this->complete_funnel( $row, $sequence->id );
+			}
 		}
 
 		// Log in campaign_emails for analytics.
@@ -435,31 +458,8 @@ class FunnelProcessor {
 	}
 
 	private function append_footer( string $body, object $email ): string {
-		$body             = $this->strip_template_unsubscribe_markup( $body );
-		$footer           = wp_kses_post( get_option( 'aime_email_footer', '' ) );
-		$company_name     = sanitize_text_field( get_option( 'aime_company_name', '' ) );
-		$company_address  = sanitize_textarea_field( get_option( 'aime_company_address', '' ) );
-		$unsubscribe_text = sanitize_text_field( get_option( 'aime_unsubscribe_text', 'Unsubscribe' ) );
-		$unsubscribe_url  = esc_url( $this->get_unsubscribe_url( $email ) );
-
-		if ( '' === $footer && '' === $company_name && '' === $company_address && '' === $unsubscribe_text ) {
-			return $body;
-		}
-
-		$footer_parts = array();
-		if ( '' !== $footer ) {
-			$footer_parts[] = $footer;
-		}
-		if ( '' !== $company_name || '' !== $company_address ) {
-			$footer_parts[] = '<p style="margin:8px 0 0;color:#64748b;font-size:12px">' . esc_html( $company_name ) . ( $company_name && $company_address ? '<br>' : '' ) . nl2br( esc_html( $company_address ) ) . '</p>';
-		}
-		if ( '' !== $unsubscribe_text ) {
-			$footer_parts[] = '<p style="margin:8px 0 0"><a href="' . $unsubscribe_url . '" style="color:#64748b">' . esc_html( $unsubscribe_text ) . '</a></p>';
-		}
-
-		$footer_html = '<div class="aime-email-footer" style="margin-top:32px;padding-top:16px;border-top:1px solid #e2e8f0;color:#64748b;font-size:12px;text-align:center">' . implode( '', $footer_parts ) . '</div>';
-
-		return false !== stripos( $body, '</body>' ) ? str_ireplace( '</body>', $footer_html . '</body>', $body ) : $body . $footer_html;
+		$unsub_url = $this->get_unsubscribe_url( $email );
+		return \WPSpace\AiMarketingExpert\Modules\EmailMarketing\Services\CampaignProcessor::render_with_footer( $body, $unsub_url );
 	}
 
 	private function strip_template_unsubscribe_markup( string $body ): string {

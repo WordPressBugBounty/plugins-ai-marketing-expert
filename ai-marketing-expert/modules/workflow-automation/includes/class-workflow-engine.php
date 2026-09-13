@@ -382,7 +382,8 @@ class WorkflowEngine {
 	/* ── Step execution ─────────────────────────────────── */
 
 	/**
-	 * Run a single step, retrying with exponential backoff when policy = retry.
+	 * Run a single step, retrying with exponential backoff when policy = retry
+	 * or when an AI generation action encounters a transient error (rate limit, timeout, 503).
 	 *
 	 * @return array Action result (with optional 'skipped' flag).
 	 */
@@ -390,15 +391,34 @@ class WorkflowEngine {
 		$result   = ActionRegistry::run( $action_type, $config, $context );
 		$attempts = 0;
 
-		if ( 'retry' !== $policy ) {
-			return $result;
-		}
+		$ai_actions = array( 'generate_blog_post', 'generate_ad_copy', 'ai_brain', 'custom_prompt', 'publish_social_post', 'send_email_campaign' );
+		$is_ai_step = in_array( $action_type, $ai_actions, true );
 
-		while ( ! $result['success'] && empty( $result['skipped'] ) && $attempts < self::MAX_RETRIES ) {
+		$should_retry = static function ( array $res, int $att ) use ( $policy, $is_ai_step ): bool {
+			if ( ! empty( $res['success'] ) || ! empty( $res['skipped'] ) || $att >= self::MAX_RETRIES ) {
+				return false;
+			}
+			if ( 'retry' === $policy ) {
+				return true;
+			}
+			// Automatic resilience for transient AI API rate limits or network dropouts:
+			if ( $is_ai_step && $att < 2 ) {
+				$err = strtolower( (string) ( $res['error'] ?? '' ) );
+				$transient_signals = array( 'rate limit', '429', 'timeout', 'timed out', 'curl error 28', 'overloaded', '503', '502', '504', 'temporarily unavailable', 'try again' );
+				foreach ( $transient_signals as $signal ) {
+					if ( false !== strpos( $err, $signal ) ) {
+						return true;
+					}
+				}
+			}
+			return false;
+		};
+
+		while ( $should_retry( $result, $attempts ) ) {
 			$attempts++;
 			$backoff = (int) pow( 2, $attempts ); // 2s, 4s, 8s.
 			sleep( min( $backoff, 8 ) );
-			aime_log( sprintf( 'Retrying workflow step "%s" (attempt %d/%d).', $action_type, $attempts, self::MAX_RETRIES ), 'info', 'workflow-automation' );
+			aime_log( sprintf( 'Retrying workflow step "%s" (attempt %d/%d). Reason: %s', $action_type, $attempts, self::MAX_RETRIES, $result['error'] ?? 'failure' ), 'info', 'workflow-automation' );
 			$result = ActionRegistry::run( $action_type, $config, $context );
 		}
 

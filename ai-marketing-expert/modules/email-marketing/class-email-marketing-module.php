@@ -57,6 +57,7 @@ class EmailMarketingModule extends Module {
 		add_action( 'aime_run_email_queue', array( $this, 'handle_email_queue_runner' ) );
 		add_action( 'aime_process_automations', array( $this, 'handle_automations' ) );
 		add_action( 'aime_daily_cleanup', array( $this, 'daily_cleanup' ) );
+		add_action( 'aime_b2b_lead_autopilot_daily', array( $this, 'run_b2b_lead_autopilot' ) );
 		add_filter( 'cron_schedules', array( $this, 'add_cron_schedules' ) );
 		add_filter( 'aime_email-marketing_dashboard_stats', array( $this, 'get_stats' ) );
 		$this->ensure_cron_events();
@@ -297,6 +298,18 @@ class EmailMarketingModule extends Module {
 		if ( ! wp_next_scheduled( 'aime_daily_cleanup' ) ) {
 			wp_schedule_event( time(), 'daily', 'aime_daily_cleanup' );
 		}
+
+		if ( ! wp_next_scheduled( 'aime_b2b_lead_autopilot_daily' ) ) {
+			wp_schedule_event( time(), 'daily', 'aime_b2b_lead_autopilot_daily' );
+		}
+	}
+
+	public function run_b2b_lead_autopilot(): void {
+		if ( ! aime_has_pro() ) {
+			return;
+		}
+		$controller = new Controllers\SubscriberController();
+		$controller->run_scheduled_autopilot();
 	}
 
 	public function daily_cleanup(): void {
@@ -561,13 +574,14 @@ class EmailMarketingModule extends Module {
 			) );
 
 			if ( 0 === $already_opened ) {
+				$country = $this->resolve_tracking_country( $this->get_tracking_ip(), (int) $email->subscriber_id );
 				$wpdb->insert( "{$p}aime_campaign_url_metrics", array(
 					'url_id'        => 0,
 					'campaign_id'   => $email->campaign_id,
 					'subscriber_id' => $email->subscriber_id,
 					'type'          => 'open',
 					'ip_address'    => $this->get_tracking_ip(),
-					'country'       => '',
+					'country'       => $country,
 					'city'          => '',
 					'created_at'    => current_time( 'mysql', true ),
 				) );
@@ -662,13 +676,14 @@ class EmailMarketingModule extends Module {
 				$existing_click_id
 			) );
 		} else {
+			$country = $this->resolve_tracking_country( $this->get_tracking_ip(), (int) $email->subscriber_id );
 			$wpdb->insert( "{$p}aime_campaign_url_metrics", array(
 				'url_id'        => $url_id,
 				'campaign_id'   => $email->campaign_id,
 				'subscriber_id' => $email->subscriber_id,
 				'type'          => 'click',
 				'ip_address'    => $this->get_tracking_ip(),
-				'country'       => '',
+				'country'       => $country,
 				'city'          => '',
 				'created_at'    => current_time( 'mysql', true ),
 			) );
@@ -934,6 +949,73 @@ class EmailMarketingModule extends Module {
 		if ( ! empty( $_SERVER['REMOTE_ADDR'] ) ) {
 			return sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ) );
 		}
+		return '';
+	}
+
+	/**
+	 * Resolve visitor country from Cloudflare headers, server GeoIP, or subscriber profile.
+	 *
+	 * @param string $ip            Visitor IP address.
+	 * @param int    $subscriber_id Subscriber ID if known.
+	 * @return string 2-letter uppercase ISO country code or empty string.
+	 */
+	private function resolve_tracking_country( string $ip, int $subscriber_id = 0 ): string {
+		// 1. Cloudflare IP country header (instant 0ms resolution).
+		if ( ! empty( $_SERVER['HTTP_CF_IPCOUNTRY'] ) ) {
+			$country = strtoupper( sanitize_text_field( wp_unslash( $_SERVER['HTTP_CF_IPCOUNTRY'] ) ) );
+			if ( 'XX' !== $country && 'T1' !== $country && 2 === strlen( $country ) ) {
+				return $country;
+			}
+		}
+
+		// 2. Server GeoIP header (mod_geoip / Nginx GeoIP).
+		if ( ! empty( $_SERVER['GEOIP_COUNTRY_CODE'] ) ) {
+			$country = strtoupper( sanitize_text_field( wp_unslash( $_SERVER['GEOIP_COUNTRY_CODE'] ) ) );
+			if ( 2 === strlen( $country ) ) {
+				return $country;
+			}
+		}
+
+		// 3. Subscriber's saved country in database if available.
+		if ( $subscriber_id > 0 ) {
+			global $wpdb;
+			$saved = $wpdb->get_var(
+				$wpdb->prepare(
+					"SELECT country FROM {$wpdb->prefix}aime_subscribers WHERE id = %d",
+					$subscriber_id
+				)
+			);
+			if ( ! empty( $saved ) && 2 === strlen( trim( $saved ) ) ) {
+				return strtoupper( trim( $saved ) );
+			}
+		}
+
+		// 4. IP-based resolution (only for valid public IPv4/IPv6, cached 30 days).
+		if ( filter_var( $ip, FILTER_VALIDATE_IP, FILTER_FLAG_NO_PRIV_RANGE | FILTER_FLAG_NO_RES_RANGE ) ) {
+			$cache_key = 'aime_geo_' . md5( $ip );
+			$cached    = get_transient( $cache_key );
+			if ( false !== $cached ) {
+				return (string) $cached;
+			}
+
+			$response = wp_remote_get(
+				sprintf( 'http://ip-api.com/json/%s?fields=countryCode', rawurlencode( $ip ) ),
+				array( 'timeout' => 2 )
+			);
+
+			if ( ! is_wp_error( $response ) && 200 === wp_remote_retrieve_response_code( $response ) ) {
+				$data = json_decode( wp_remote_retrieve_body( $response ), true );
+				if ( ! empty( $data['countryCode'] ) && 2 === strlen( (string) $data['countryCode'] ) ) {
+					$code = strtoupper( (string) $data['countryCode'] );
+					set_transient( $cache_key, $code, 30 * DAY_IN_SECONDS );
+					return $code;
+				}
+			}
+
+			// Cache negative result for 1 day to avoid re-querying failing IP.
+			set_transient( $cache_key, '', DAY_IN_SECONDS );
+		}
+
 		return '';
 	}
 

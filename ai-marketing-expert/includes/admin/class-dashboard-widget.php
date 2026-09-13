@@ -249,9 +249,10 @@ class DashboardWidget {
 			'aime-dashboard-widget',
 			'aimeWidgetData',
 			array(
-				'ajaxUrl'   => admin_url( 'admin-ajax.php' ),
-				'nonce'     => wp_create_nonce( 'aime_dashboard_widget' ),
-				'hasActive' => $chatbot['active_count'] > 0,
+				'ajaxUrl'    => admin_url( 'admin-ajax.php' ),
+				'chatbotUrl' => admin_url( 'admin.php?page=ai-marketing-expert-chatbot' ),
+				'nonce'      => wp_create_nonce( 'aime_dashboard_widget' ),
+				'hasActive'  => $chatbot['active_count'] > 0,
 			)
 		);
 		?>
@@ -350,7 +351,10 @@ class DashboardWidget {
 			<?php if ( ! empty( $recent ) ) : ?>
 				<div class="aime-dw__feed" id="aime-dw-chatbot-feed">
 					<?php foreach ( $recent as $conv ) : ?>
-						<div class="aime-dw__feed-item <?php echo 'human_takeover' === $conv['status'] ? 'aime-dw__feed-item--attention' : ''; ?>">
+						<?php $conv_url = admin_url( 'admin.php?page=ai-marketing-expert-chatbot#conversation/' . (int) $conv['id'] ); ?>
+						<a href="<?php echo esc_url( $conv_url ); ?>"
+						   class="aime-dw__feed-item <?php echo 'human_takeover' === $conv['status'] ? 'aime-dw__feed-item--attention' : ''; ?>"
+						   title="<?php echo esc_attr( sprintf( __( 'Open conversation with %s', 'ai-marketing-expert' ), $conv['visitor_name'] ) ); ?>">
 							<span class="aime-dw__feed-dot <?php echo 'active' === $conv['status'] ? 'aime-dw__feed-dot--green' : 'aime-dw__feed-dot--orange'; ?>"></span>
 							<span class="aime-dw__feed-name"><?php echo esc_html( $conv['visitor_name'] ); ?></span>
 							<?php if ( $conv['page_url'] ) : ?>
@@ -366,7 +370,8 @@ class DashboardWidget {
 								?>
 							</span>
 							<span class="aime-dw__feed-time"><?php echo esc_html( $conv['time_ago'] ); ?></span>
-						</div>
+							<span class="dashicons dashicons-arrow-right-alt2 aime-dw__feed-arrow" aria-hidden="true"></span>
+						</a>
 					<?php endforeach; ?>
 				</div>
 			<?php endif; ?>

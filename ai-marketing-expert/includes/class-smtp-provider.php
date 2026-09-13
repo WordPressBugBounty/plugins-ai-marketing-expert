@@ -23,7 +23,7 @@ class SmtpProvider {
 	 * Option key for SMTP connections.
 	 */
 	const OPTION_KEY = 'aime_smtp_connections';
-	const DEFAULT_DAILY_LIMIT = 90;
+	const DEFAULT_DAILY_LIMIT = 50000;
 
 	/**
 	 * Stable marker stored in aime_campaign_emails.note when a queued email is
@@ -767,8 +767,17 @@ class SmtpProvider {
 					return true;
 				}
 			} catch ( \Exception $e ) {
+				$msg = $e->getMessage();
+				if ( self::is_hard_bounce_error( $msg ) ) {
+					// Immediate permanent rejection (e.g. 550 User unknown). Do not retry across other SMTPs.
+					self::record_hard_bounce( $to, $msg );
+					if ( function_exists( 'aime_log' ) ) {
+						aime_log( sprintf( "SMTP hard bounce for '%s': %s", $to, $msg ), 'warning' );
+					}
+					return false;
+				}
 				if ( function_exists( 'aime_log' ) ) {
-					aime_log( sprintf( "SMTP '%s' failed: %s", $conn['name'], $e->getMessage() ), 'warning' );
+					aime_log( sprintf( "SMTP '%s' failed: %s", $conn['name'], $msg ), 'warning' );
 				}
 				continue;
 			}
@@ -837,6 +846,107 @@ class SmtpProvider {
 
 		$mail->send();
 		return true;
+	}
+
+	/**
+	 * Inspect error message/code for permanent delivery failure (Hard Bounce).
+	 *
+	 * @param string $error Error message from PHPMailer / SMTP server.
+	 * @return bool True if this is a confirmed hard bounce.
+	 */
+	public static function is_hard_bounce_error( string $error ): bool {
+		$error_lower = strtolower( $error );
+
+		// RFC 3463 permanent failure codes and SMTP 5xx codes.
+		$patterns = array(
+			'550',
+			'551',
+			'552',
+			'553',
+			'554',
+			'5.1.1',
+			'5.1.2',
+			'5.1.3',
+			'5.1.6',
+			'5.2.1',
+			'user unknown',
+			'recipient address rejected',
+			'does not exist',
+			'no such user',
+			'mailbox unavailable',
+			'invalid recipient',
+			'address rejected',
+			'recipient unknown',
+			'bad destination mailbox',
+			'mailbox not found',
+			'account does not exist',
+		);
+
+		foreach ( $patterns as $pat ) {
+			if ( strpos( $error_lower, $pat ) !== false ) {
+				return true;
+			}
+		}
+
+		return false;
+	}
+
+	/**
+	 * Record a hard bounce on subscriber, metrics, and activity log.
+	 *
+	 * @param string $email Failed email address.
+	 * @param string $reason Failure reason / SMTP error.
+	 */
+	public static function record_hard_bounce( string $email, string $reason = '' ): void {
+		global $wpdb;
+		$subscribers_table = $wpdb->prefix . 'aime_subscribers';
+		$metrics_table     = $wpdb->prefix . 'aime_campaign_url_metrics';
+		$now               = current_time( 'mysql', true );
+
+		$sub = $wpdb->get_row( $wpdb->prepare( "SELECT id, status FROM {$subscribers_table} WHERE email = %s", sanitize_email( $email ) ) );
+		if ( ! $sub ) {
+			return;
+		}
+
+		$sub_id     = (int) $sub->id;
+		$old_status = (string) $sub->status;
+
+		if ( 'bounced' !== $old_status ) {
+			$wpdb->update(
+				$subscribers_table,
+				array( 'status' => 'bounced', 'updated_at' => $now ),
+				array( 'id' => $sub_id )
+			);
+
+			// Attribute the bounce to the most recent campaign email.
+			$campaign_id = (int) $wpdb->get_var(
+				$wpdb->prepare(
+					'SELECT campaign_id FROM %i WHERE subscriber_id = %d ORDER BY id DESC LIMIT 1',
+					$wpdb->prefix . 'aime_campaign_emails',
+					$sub_id
+				)
+			);
+
+			$wpdb->insert( $metrics_table, array(
+				'url_id'        => 0,
+				'campaign_id'   => $campaign_id,
+				'subscriber_id' => $sub_id,
+				'type'          => 'bounce',
+				'ip_address'    => sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ?? '127.0.0.1' ) ),
+				'country'       => '',
+				'city'          => '',
+				'created_at'    => $now,
+			) );
+
+			$wpdb->insert( $wpdb->prefix . 'aime_activity_log', array(
+				'subscriber_id' => $sub_id,
+				'type'          => 'bounced',
+				'description'   => sprintf( 'Permanent SMTP rejection: %s', mb_substr( $reason, 0, 255 ) ),
+				'created_at'    => $now,
+			) );
+
+			do_action( 'aime_subscriber_status_change', $sub_id, $old_status, 'bounced' );
+		}
 	}
 
 	/* ================================================================
@@ -1134,7 +1244,7 @@ class SmtpProvider {
 			'smtp_password'   => $settings['smtp_password'] ?? '',
 			'from_name'       => $settings['from_name'] ?? '',
 			'from_email'      => $settings['from_email'] ?? '',
-			'sending_limit'   => self::DEFAULT_DAILY_LIMIT,
+			'sending_limit'   => 'wp_mail' === $method ? 0 : self::DEFAULT_DAILY_LIMIT,
 			'sort_order'      => 0,
 			'is_primary'      => true,
 			'enabled'         => true,
@@ -1288,9 +1398,18 @@ class SmtpProvider {
 	}
 
 	private static function has_reached_daily_limit( array $conn ): bool {
-		$limit = max( 1, absint( $conn['sending_limit'] ?? self::DEFAULT_DAILY_LIMIT ) );
-		$usage = self::get_connection_usage( $conn );
-		$count = $usage['count'];
+		// WordPress default (wp_mail) delegates to server/plugins (SES, Bit-SMTP, etc.) and should not be capped by default.
+		if ( 'wp_mail' === ( $conn['provider'] ?? '' ) ) {
+			$custom_limit = absint( $conn['sending_limit'] ?? $conn['daily_limit'] ?? 0 );
+			if ( 0 === $custom_limit || 90 === $custom_limit ) {
+				return false;
+			}
+		}
+
+		$default_limit = (int) apply_filters( 'aime_smtp_default_daily_limit', self::DEFAULT_DAILY_LIMIT, $conn );
+		$limit         = max( 1, absint( $conn['sending_limit'] ?? $conn['daily_limit'] ?? $default_limit ) );
+		$usage         = self::get_connection_usage( $conn );
+		$count         = $usage['count'];
 
 		return $count >= $limit;
 	}

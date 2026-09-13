@@ -198,47 +198,198 @@ function aime_log( string $message, string $level = 'info', string $module = 'co
 }
 
 /**
- * Prune the plugin log table. Hooked to the aime_daily_cleanup cron.
+ * Run full database pruning across logs, workflow executions, outputs, and completed queue records.
  *
- * Removes entries older than 30 days, then trims the table to the newest
- * 2,000 rows so the debug-log UI stays useful without unbounded growth.
+ * @param int $days Optional custom retention days. Defaults to setting (or 60).
+ * @return array Prune statistics.
  */
-function aime_prune_logs(): void {
+function aime_run_database_prune( int $days = -1, bool $force_logs = false ): array {
 	global $wpdb;
+	$p = $wpdb->prefix;
 
-	$table = $wpdb->prefix . 'aime_log';
-
-	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $table ) ) !== $table ) {
-		return;
+	if ( $days < 0 ) {
+		$settings = get_option( 'aime_settings', array() );
+		$days     = isset( $settings['retention_days'] ) ? absint( $settings['retention_days'] ) : 60;
 	}
 
-	/**
-	 * Filter the maximum number of log rows kept after pruning.
-	 *
-	 * @param int $max_rows Row cap. Default 2000.
-	 */
-	$max_rows = max( 100, (int) apply_filters( 'aime_log_max_rows', 2000 ) );
-
-	// Remove entries older than 30 days.
-	$wpdb->query(
-		$wpdb->prepare(
-			'DELETE FROM %i WHERE created_at < %s',
-			$table,
-			gmdate( 'Y-m-d H:i:s', time() - ( 30 * DAY_IN_SECONDS ) )
-		)
-	);
-
-	$count = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $table ) );
-	if ( $count > $max_rows ) {
-		$wpdb->query(
-			$wpdb->prepare(
-				'DELETE FROM %i WHERE id NOT IN ( SELECT id FROM ( SELECT id FROM %i ORDER BY created_at DESC LIMIT %d ) AS keep_rows )',
-				$table,
-				$table,
-				$max_rows
-			)
+	// 0 means keep indefinitely unless force_logs is requested.
+	if ( 0 === $days && ! $force_logs ) {
+		return array(
+			'total_pruned' => 0,
+			'status'       => 'skipped_indefinite',
 		);
 	}
+
+	$cutoff       = gmdate( 'Y-m-d H:i:s', time() - ( $days * DAY_IN_SECONDS ) );
+	$total_pruned = 0;
+	$details      = array();
+
+	// 1. aime_log.
+	$log_table = "{$p}aime_log";
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $log_table ) ) === $log_table ) {
+		if ( $force_logs ) {
+			$pruned = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM %i", $log_table ) );
+		} else {
+			$pruned = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM %i WHERE created_at < %s", $log_table, $cutoff ) );
+		}
+		$total_pruned += $pruned;
+		$details['aime_log'] = $pruned;
+
+		// Secondary trim to max rows so log viewer remains fast.
+		if ( ! $force_logs ) {
+			$max_rows = max( 100, (int) apply_filters( 'aime_log_max_rows', 2000 ) );
+			$count    = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $log_table ) );
+			if ( $count > $max_rows ) {
+				$trimmed = (int) $wpdb->query(
+					$wpdb->prepare(
+						'DELETE FROM %i WHERE id NOT IN ( SELECT id FROM ( SELECT id FROM %i ORDER BY created_at DESC LIMIT %d ) AS keep_rows )',
+						$log_table,
+						$log_table,
+						$max_rows
+					)
+				);
+				$total_pruned += $trimmed;
+				$details['aime_log_trimmed'] = $trimmed;
+			}
+		}
+	}
+
+	// 2. aime_activity_log.
+	$act_table = "{$p}aime_activity_log";
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $act_table ) ) === $act_table ) {
+		if ( $force_logs ) {
+			$pruned = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM %i", $act_table ) );
+		} else {
+			$pruned = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM %i WHERE created_at < %s", $act_table, $cutoff ) );
+		}
+		$total_pruned += $pruned;
+		$details['aime_activity_log'] = $pruned;
+	}
+
+	// 3. Workflow executions and outputs.
+	$exec_table = "{$p}aime_workflow_executions";
+	$out_table  = "{$p}aime_workflow_outputs";
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $exec_table ) ) === $exec_table ) {
+		if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $out_table ) ) === $out_table ) {
+			$wpdb->query( $wpdb->prepare(
+				"DELETE o FROM %i o
+				 INNER JOIN %i e ON e.id = o.execution_id
+				 WHERE e.started_at < %s",
+				$out_table,
+				$exec_table,
+				$cutoff
+			) );
+		}
+		$pruned = (int) $wpdb->query( $wpdb->prepare( "DELETE FROM %i WHERE started_at < %s", $exec_table, $cutoff ) );
+		$total_pruned += $pruned;
+		$details['workflow_executions'] = $pruned;
+	}
+
+	// 4. Completed campaign emails (already sent or failed).
+	$emails_table = "{$p}aime_campaign_emails";
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $emails_table ) ) === $emails_table ) {
+		$pruned = (int) $wpdb->query( $wpdb->prepare(
+			"DELETE FROM %i WHERE status IN ('sent', 'failed') AND created_at < %s",
+			$emails_table,
+			$cutoff
+		) );
+		$total_pruned += $pruned;
+		$details['campaign_emails'] = $pruned;
+	}
+
+	return array(
+		'total_pruned' => $total_pruned,
+		'cutoff'       => $cutoff,
+		'retention'    => $days,
+		'details'      => $details,
+	);
+}
+
+/**
+ * Get database hygiene and pruning statistics across logs and execution tables.
+ *
+ * @return array Hygiene stats.
+ */
+function aime_get_database_hygiene_stats(): array {
+	global $wpdb;
+	$p = $wpdb->prefix;
+
+	$settings       = get_option( 'aime_settings', array() );
+	$retention_days = isset( $settings['retention_days'] ) ? absint( $settings['retention_days'] ) : 60;
+	$cutoff         = $retention_days > 0 ? gmdate( 'Y-m-d H:i:s', time() - ( $retention_days * DAY_IN_SECONDS ) ) : null;
+
+	$stats = array(
+		'retention_days' => $retention_days,
+		'cutoff'         => $cutoff,
+		'tables'         => array(),
+		'total_rows'     => 0,
+		'expired_rows'   => 0,
+	);
+
+	// 1. aime_log.
+	$log_table = "{$p}aime_log";
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $log_table ) ) === $log_table ) {
+		$total   = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $log_table ) );
+		$expired = $cutoff ? (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i WHERE created_at < %s', $log_table, $cutoff ) ) : 0;
+		$stats['tables']['aime_log'] = array(
+			'label'   => __( 'System Debug Logs', 'ai-marketing-expert' ),
+			'total'   => $total,
+			'expired' => $expired,
+		);
+		$stats['total_rows']   += $total;
+		$stats['expired_rows'] += $expired;
+	}
+
+	// 2. aime_activity_log.
+	$act_table = "{$p}aime_activity_log";
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $act_table ) ) === $act_table ) {
+		$total   = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $act_table ) );
+		$expired = $cutoff ? (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i WHERE created_at < %s', $act_table, $cutoff ) ) : 0;
+		$stats['tables']['aime_activity_log'] = array(
+			'label'   => __( 'Activity History Logs', 'ai-marketing-expert' ),
+			'total'   => $total,
+			'expired' => $expired,
+		);
+		$stats['total_rows']   += $total;
+		$stats['expired_rows'] += $expired;
+	}
+
+	// 3. aime_workflow_executions.
+	$exec_table = "{$p}aime_workflow_executions";
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $exec_table ) ) === $exec_table ) {
+		$total   = (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i', $exec_table ) );
+		$expired = $cutoff ? (int) $wpdb->get_var( $wpdb->prepare( 'SELECT COUNT(*) FROM %i WHERE started_at < %s', $exec_table, $cutoff ) ) : 0;
+		$stats['tables']['workflow_executions'] = array(
+			'label'   => __( 'Workflow Executions', 'ai-marketing-expert' ),
+			'total'   => $total,
+			'expired' => $expired,
+		);
+		$stats['total_rows']   += $total;
+		$stats['expired_rows'] += $expired;
+	}
+
+	// 4. aime_campaign_emails.
+	$emails_table = "{$p}aime_campaign_emails";
+	if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $emails_table ) ) === $emails_table ) {
+		$total   = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE status IN ('sent', 'failed')", $emails_table ) );
+		$expired = $cutoff ? (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(*) FROM %i WHERE status IN ('sent', 'failed') AND created_at < %s", $emails_table, $cutoff ) ) : 0;
+		$stats['tables']['campaign_emails'] = array(
+			'label'   => __( 'Archived Campaign Queue', 'ai-marketing-expert' ),
+			'total'   => $total,
+			'expired' => $expired,
+		);
+		$stats['total_rows']   += $total;
+		$stats['expired_rows'] += $expired;
+	}
+
+	return $stats;
+}
+
+/**
+ * Prune the plugin database tables. Hooked to the aime_daily_cleanup cron.
+ */
+function aime_prune_logs(): void {
+	aime_run_database_prune();
 }
 
 /**

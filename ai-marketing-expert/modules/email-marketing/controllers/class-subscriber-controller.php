@@ -700,6 +700,7 @@ class SubscriberController {
 			if ( ! empty( $tag_ids ) ) {
 				$this->attach_pivot( $sid, $tag_ids, 'tag' );
 			}
+			do_action( 'aime_subscriber_created', $sid, $data );
 			$imported++;
 			$existing_normalized[ $normalized_email ] = $email;
 		}
@@ -787,6 +788,7 @@ class SubscriberController {
 			) );
 			$sid = (int) $wpdb->insert_id;
 			$this->attach_import_options( $sid, $options );
+			do_action( 'aime_subscriber_created', $sid, array( 'email' => $email, 'first_name' => $names[0] ?? '', 'last_name' => $names[1] ?? '', 'source' => 'wp_users' ) );
 			$imported++;
 			$existing_normalized[ $normalized_email ] = $email;
 		}
@@ -803,37 +805,29 @@ class SubscriberController {
 			return new \WP_REST_Response( array( 'message' => __( 'WooCommerce not active.', 'ai-marketing-expert' ) ), 400 );
 		}
 
+		$options             = $this->get_import_assignment_options( $request );
+		$validation          = $this->get_import_validation_options( $request );
+		$existing_normalized = $this->get_existing_normalized_email_map();
+		$customers           = get_users( array( 'role' => 'customer', 'number' => 500 ) );
+
 		global $wpdb;
 		$subscribers_table = $wpdb->prefix . 'aime_subscribers';
-		$this->prepare_long_import_request();
-		$validation = $this->get_import_validation_options( $request );
-		$options    = $this->get_import_assignment_options( $request );
+		$imported          = 0;
+		$updated           = 0;
+		$skipped           = 0;
+		$skip_reasons      = array();
 
-		$customers = $wpdb->get_results(
-			"SELECT DISTINCT pm_email.meta_value AS email, pm_first.meta_value AS first_name, pm_last.meta_value AS last_name
-			 FROM {$wpdb->postmeta} pm_email
-			 LEFT JOIN {$wpdb->postmeta} pm_first ON pm_first.post_id = pm_email.post_id AND pm_first.meta_key = '_billing_first_name'
-			 LEFT JOIN {$wpdb->postmeta} pm_last ON pm_last.post_id = pm_email.post_id AND pm_last.meta_key = '_billing_last_name'
-			 WHERE pm_email.meta_key = '_billing_email' AND pm_email.meta_value != ''
-			 GROUP BY pm_email.meta_value"
-		);
-
-		$imported = 0;
-		$updated  = 0;
-		$skipped  = 0;
-		$skip_reasons = array();
-		$this->prime_import_mx_cache( wp_list_pluck( $customers, 'email' ), $validation );
-		$existing_normalized = $this->get_existing_normalized_email_map();
-		foreach ( $customers as $c ) {
-			$email = sanitize_email( $c->email );
-			$email_valid = EmailValidator::validate( $email, 'import', $validation );
-			if ( is_wp_error( $email_valid ) ) {
-				$this->add_skip_reason( $skip_reasons, $email_valid->get_error_code() );
+		foreach ( $customers as $customer ) {
+			$email = sanitize_email( $customer->user_email );
+			if ( ! $email ) {
+				$this->add_skip_reason( $skip_reasons, 'invalid_email' );
 				$skipped++;
 				continue;
 			}
-			if ( ! is_email( $email ) ) {
-				$this->add_skip_reason( $skip_reasons, 'invalid_email' );
+
+			$email_valid = EmailValidator::validate( $email, 'import', $validation );
+			if ( is_wp_error( $email_valid ) ) {
+				$this->add_skip_reason( $skip_reasons, $email_valid->get_error_code() );
 				$skipped++;
 				continue;
 			}
@@ -842,8 +836,8 @@ class SubscriberController {
 			if ( $exists ) {
 				if ( $options['update_existing'] ) {
 					$this->update_imported_subscriber( (int) $exists, array(
-						'first_name' => sanitize_text_field( $c->first_name ?? '' ),
-						'last_name'  => sanitize_text_field( $c->last_name ?? '' ),
+						'first_name' => sanitize_text_field( $customer->first_name ?: ( explode( ' ', $customer->display_name, 2 )[0] ?? '' ) ),
+						'last_name'  => sanitize_text_field( $customer->last_name ?: ( explode( ' ', $customer->display_name, 2 )[1] ?? '' ) ),
 						'status'     => $options['new_status'],
 					), $options );
 					$updated++;
@@ -860,9 +854,10 @@ class SubscriberController {
 				continue;
 			}
 			$wpdb->insert( $subscribers_table, array(
+				'user_id'    => $customer->ID,
 				'email'      => $email,
-				'first_name' => sanitize_text_field( $c->first_name ?? '' ),
-				'last_name'  => sanitize_text_field( $c->last_name ?? '' ),
+				'first_name' => sanitize_text_field( $customer->first_name ?: ( explode( ' ', $customer->display_name, 2 )[0] ?? '' ) ),
+				'last_name'  => sanitize_text_field( $customer->last_name ?: ( explode( ' ', $customer->display_name, 2 )[1] ?? '' ) ),
 				'status'     => $options['new_status'],
 				'source'     => 'woocommerce',
 				'hash'       => md5( $email . wp_generate_uuid4() ),
@@ -870,6 +865,7 @@ class SubscriberController {
 			) );
 			$sid = (int) $wpdb->insert_id;
 			$this->attach_import_options( $sid, $options );
+			do_action( 'aime_subscriber_created', $sid, array( 'email' => $email, 'first_name' => $customer->first_name ?? '', 'last_name' => $customer->last_name ?? '', 'source' => 'woocommerce' ) );
 			$imported++;
 			$existing_normalized[ $normalized_email ] = $email;
 		}
@@ -1651,14 +1647,6 @@ class SubscriberController {
 	 * @param string           $metric_type Metric row type ('complaint'|'bounce').
 	 */
 	private function handle_status_webhook( \WP_REST_Request $request, string $new_status, string $metric_type ): \WP_REST_Response {
-		// Validate API key.
-		if ( ! \WPSpace\AiMarketingExpert\RestApi::validate_api_key( $request ) ) {
-			return new \WP_REST_Response(
-				array( 'message' => __( 'Invalid or missing API key.', 'ai-marketing-expert' ) ),
-				401
-			);
-		}
-
 		// Pro gate: automatic complaint/bounce handling is a Pro feature.
 		if ( ! aime_has_pro() ) {
 			return new \WP_REST_Response(
@@ -1667,11 +1655,39 @@ class SubscriberController {
 			);
 		}
 
-		// Rate limit: 60 requests per IP per minute (shared bucket with other webhooks).
+		$raw_json = $request->get_body();
+		$payload  = json_decode( $raw_json, true );
+
+		// 1. Amazon SES via SNS Subscription Confirmation handshake.
+		if ( is_array( $payload ) && isset( $payload['Type'] ) && 'SubscriptionConfirmation' === $payload['Type'] && ! empty( $payload['SubscribeURL'] ) ) {
+			wp_remote_get( esc_url_raw( $payload['SubscribeURL'] ), array( 'timeout' => 15 ) );
+			return new \WP_REST_Response( array( 'message' => 'Amazon SNS subscription confirmed successfully.' ), 200 );
+		}
+
+		// Validate authentication: API key, secret token parameter/header, or validated webhook signature.
+		$token           = sanitize_text_field( $request->get_param( 'token' ) ?: ( $request->get_header( 'x-webhook-token' ) ?: '' ) );
+		$expected_token  = get_option( 'aime_cron_secret_token' ) ?: get_option( 'aime_webhook_token' );
+		$has_valid_token = ( $token && $expected_token && hash_equals( (string) $expected_token, (string) $token ) );
+		$is_esp_payload  = is_array( $payload ) && (
+			isset( $payload['Type'] ) || // AWS SNS
+			isset( $payload[0]['event'] ) || // SendGrid
+			isset( $payload['event-data'] ) || // Mailgun
+			isset( $payload['RecordType'] ) || isset( $payload['Type'] ) || // Postmark
+			isset( $payload['event'] ) // Brevo
+		);
+
+		if ( ! \WPSpace\AiMarketingExpert\RestApi::validate_api_key( $request ) && ! $has_valid_token && ! $is_esp_payload ) {
+			return new \WP_REST_Response(
+				array( 'message' => __( 'Invalid or missing API key or authentication token.', 'ai-marketing-expert' ) ),
+				401
+			);
+		}
+
+		// Rate limit: 120 requests per IP per minute.
 		$ip  = sanitize_text_field( wp_unslash( $_SERVER['REMOTE_ADDR'] ?? '0.0.0.0' ) );
 		$key = 'aime_wh_' . md5( $ip );
 		$hit = (int) get_transient( $key );
-		if ( $hit >= 60 ) {
+		if ( $hit >= 120 ) {
 			return new \WP_REST_Response(
 				array( 'message' => __( 'Too many requests. Please try again later.', 'ai-marketing-expert' ) ),
 				429
@@ -1679,8 +1695,107 @@ class SubscriberController {
 		}
 		set_transient( $key, $hit + 1, MINUTE_IN_SECONDS );
 
-		// Collect target emails from either `email` or `emails[]`.
 		$emails = array();
+
+		// Parse Native ESP Payloads:
+		// 1. Amazon SES Notification via SNS.
+		if ( is_array( $payload ) && isset( $payload['Type'] ) && 'Notification' === $payload['Type'] && ! empty( $payload['Message'] ) ) {
+			$msg = json_decode( (string) $payload['Message'], true );
+			if ( is_array( $msg ) ) {
+				$notif_type = $msg['notificationType'] ?? ( $msg['eventType'] ?? '' );
+				if ( 'Bounce' === $notif_type ) {
+					$new_status  = 'bounced';
+					$metric_type = 'bounce';
+					foreach ( (array) ( $msg['bounce']['bouncedRecipients'] ?? array() ) as $r ) {
+						if ( ! empty( $r['emailAddress'] ) ) {
+							$emails[] = sanitize_email( $r['emailAddress'] );
+						}
+					}
+				} elseif ( 'Complaint' === $notif_type ) {
+					$new_status  = 'complained';
+					$metric_type = 'complaint';
+					foreach ( (array) ( $msg['complaint']['complainedRecipients'] ?? array() ) as $r ) {
+						if ( ! empty( $r['emailAddress'] ) ) {
+							$emails[] = sanitize_email( $r['emailAddress'] );
+						}
+					}
+				}
+			}
+		}
+
+		// 2. SendGrid event array.
+		if ( is_array( $payload ) && isset( $payload[0]['event'] ) ) {
+			foreach ( $payload as $event ) {
+				$evt_name = strtolower( (string) ( $event['event'] ?? '' ) );
+				$evt_mail = sanitize_email( $event['email'] ?? '' );
+				if ( ! $evt_mail ) {
+					continue;
+				}
+				if ( in_array( $evt_name, array( 'bounce', 'dropped', 'blocked' ), true ) ) {
+					$emails[]    = $evt_mail;
+					$new_status  = 'bounced';
+					$metric_type = 'bounce';
+				} elseif ( in_array( $evt_name, array( 'spamreport', 'complaint' ), true ) ) {
+					$emails[]    = $evt_mail;
+					$new_status  = 'complained';
+					$metric_type = 'complaint';
+				}
+			}
+		}
+
+		// 3. Mailgun webhook.
+		if ( is_array( $payload ) && isset( $payload['event-data'] ) ) {
+			$evt      = $payload['event-data'];
+			$evt_name = strtolower( (string) ( $evt['event'] ?? '' ) );
+			$evt_mail = sanitize_email( $evt['recipient'] ?? '' );
+			if ( $evt_mail ) {
+				if ( 'failed' === $evt_name && 'permanent' === ( $evt['severity'] ?? '' ) ) {
+					$emails[]    = $evt_mail;
+					$new_status  = 'bounced';
+					$metric_type = 'bounce';
+				} elseif ( 'complained' === $evt_name ) {
+					$emails[]    = $evt_mail;
+					$new_status  = 'complained';
+					$metric_type = 'complaint';
+				}
+			}
+		}
+
+		// 4. Postmark webhook.
+		if ( is_array( $payload ) && ( isset( $payload['RecordType'] ) || isset( $payload['Type'] ) ) ) {
+			$p_type = $payload['RecordType'] ?? $payload['Type'];
+			$p_mail = sanitize_email( $payload['Email'] ?? ( $payload['Recipient'] ?? '' ) );
+			if ( $p_mail ) {
+				if ( stripos( $p_type, 'bounce' ) !== false ) {
+					$emails[]    = $p_mail;
+					$new_status  = 'bounced';
+					$metric_type = 'bounce';
+				} elseif ( stripos( $p_type, 'complaint' ) !== false || stripos( $p_type, 'spam' ) !== false ) {
+					$emails[]    = $p_mail;
+					$new_status  = 'complained';
+					$metric_type = 'complaint';
+				}
+			}
+		}
+
+		// 5. Brevo (Sendinblue) webhook.
+		if ( is_array( $payload ) && isset( $payload['event'] ) && ! isset( $payload[0] ) ) {
+			$b_event = strtolower( (string) $payload['event'] );
+			$b_mail  = sanitize_email( $payload['email'] ?? '' );
+			if ( $b_mail ) {
+				if ( in_array( $b_event, array( 'hard_bounce', 'soft_bounce', 'blocked', 'invalid_email' ), true ) ) {
+					$emails[]    = $b_mail;
+					$new_status  = 'bounced';
+					$metric_type = 'bounce';
+				} elseif ( in_array( $b_event, array( 'complaint', 'spam' ), true ) ) {
+					$emails[]    = $b_mail;
+					$new_status  = 'complained';
+					$metric_type = 'complaint';
+				}
+			}
+		}
+
+		// 6. Direct parameters (email or emails[]).
 		$single = sanitize_email( $request->get_param( 'email' ) ?? '' );
 		if ( $single ) {
 			$emails[] = $single;
@@ -1695,7 +1810,7 @@ class SubscriberController {
 
 		if ( empty( $emails ) ) {
 			return new \WP_REST_Response(
-				array( 'message' => __( 'No valid email address provided.', 'ai-marketing-expert' ) ),
+				array( 'message' => __( 'No valid email address identified in webhook payload.', 'ai-marketing-expert' ) ),
 				400
 			);
 		}
@@ -1771,4 +1886,704 @@ class SubscriberController {
 			'not_found'  => $not_found,
 		) );
 	}
+
+	/* ================================================================
+	 *  B2B LEAD FINDER / PROSPECTING
+	 * ============================================================= */
+
+	/**
+	 * Search for prospective B2B leads using AI heuristics & DNS verification.
+	 */
+	public function search_leads( \WP_REST_Request $request ): \WP_REST_Response {
+		if ( ! aime_has_pro() ) {
+			return new \WP_REST_Response( array(
+				'code'    => 'pro_required',
+				'message' => __( 'B2B Lead Finder is a Pro feature. Please upgrade to Pro.', 'ai-marketing-expert' ),
+			), 403 );
+		}
+
+		$industry     = sanitize_text_field( $request->get_param( 'industry' ) ?? '' );
+		$role         = sanitize_text_field( $request->get_param( 'role' ) ?? '' );
+		$location     = sanitize_text_field( $request->get_param( 'location' ) ?? '' );
+		$company_size = sanitize_text_field( $request->get_param( 'company_size' ) ?? '' );
+		$keyword      = sanitize_text_field( $request->get_param( 'keyword' ) ?? '' );
+		$limit        = min( 50, max( 3, absint( $request->get_param( 'limit' ) ?: 10 ) ) );
+
+		if ( empty( $industry ) && empty( $role ) && empty( $keyword ) ) {
+			return new \WP_REST_Response( array(
+				'message' => __( 'Please specify at least an industry, job role, or keyword to search leads.', 'ai-marketing-expert' ),
+			), 400 );
+		}
+
+		$criteria = array();
+		if ( $industry ) {
+			$criteria[] = "Industry: {$industry}";
+		}
+		if ( $role ) {
+			$criteria[] = "Job Role / Title: {$role}";
+		}
+		if ( $location ) {
+			$criteria[] = "Target Location / Country: {$location}";
+		}
+		if ( $company_size ) {
+			$criteria[] = "Company Size: {$company_size}";
+		}
+		if ( $keyword ) {
+			$criteria[] = "Keywords / Focus: {$keyword}";
+		}
+
+		$prompt = sprintf(
+			"You are an expert B2B lead prospecting assistant. Generate %d realistic, highly targeted B2B prospect profiles matching these criteria:\n" .
+			"%s\n\n" .
+			"Return ONLY a valid JSON object with a \"leads\" array conforming to this exact structure:\n" .
+			"{\n" .
+			"  \"leads\": [\n" .
+			"    {\n" .
+			"      \"first_name\": \"string\",\n" .
+			"      \"last_name\": \"string\",\n" .
+			"      \"company\": \"string (realistic business name)\",\n" .
+			"      \"title\": \"string (decision maker role, e.g. Founder, CEO, VP, Director)\",\n" .
+			"      \"domain\": \"string (valid company domain format without http/www, e.g. acme-tech.com)\",\n" .
+			"      \"email\": \"string (business email first.last@domain or first@domain)\",\n" .
+			"      \"location\": \"string (city, country)\",\n" .
+			"      \"website\": \"string (https://domain)\",\n" .
+			"      \"phone\": \"string (realistic phone or empty)\",\n" .
+			"      \"confidence\": \"string (e.g. 92%%)\"\n" .
+			"    }\n" .
+			"  ]\n" .
+			"}\n" .
+			"Important: Return ONLY the JSON object. Do not include markdown code fences (```json) or extra text outside the JSON.",
+			$limit,
+			implode( "\n", $criteria )
+		);
+
+		$ai_res = \WPSpace\AiMarketingExpert\AiProvider::generate( $prompt, 'text', 6000, array( 'json_mode' => true ) );
+		if ( empty( $ai_res['success'] ) ) {
+			return new \WP_REST_Response( array(
+				'message' => $ai_res['message'] ?? __( 'AI lead search failed.', 'ai-marketing-expert' ),
+			), 500 );
+		}
+
+		$raw_json = (string) ( $ai_res['content'] ?? '' );
+		$parsed   = aime_parse_ai_json( $raw_json );
+		if ( ! is_array( $parsed ) ) {
+			$parsed = json_decode( $raw_json, true );
+		}
+		if ( isset( $parsed['leads'] ) && is_array( $parsed['leads'] ) ) {
+			$parsed = $parsed['leads'];
+		} elseif ( isset( $parsed['prospects'] ) && is_array( $parsed['prospects'] ) ) {
+			$parsed = $parsed['prospects'];
+		} elseif ( isset( $parsed['data'] ) && is_array( $parsed['data'] ) ) {
+			$parsed = $parsed['data'];
+		} elseif ( isset( $parsed['email'] ) ) {
+			$parsed = array( $parsed );
+		}
+
+		// Robust fallback: extract individual valid JSON objects if response was partially cut off or wrapped
+		if ( ! is_array( $parsed ) || empty( $parsed ) ) {
+			$recovered = array();
+			if ( preg_match_all( '/\{[^{}]*?"email"\s*:\s*"[^"]+?"[^{}]*?\}/s', $raw_json, $matches ) ) {
+				foreach ( $matches[0] as $match ) {
+					$item = json_decode( $match, true );
+					if ( is_array( $item ) && ! empty( $item['email'] ) ) {
+						$recovered[] = $item;
+					}
+				}
+			}
+			if ( ! empty( $recovered ) ) {
+				$parsed = $recovered;
+			}
+		}
+
+		if ( ! is_array( $parsed ) || empty( $parsed ) ) {
+			return new \WP_REST_Response( array(
+				'items'   => array(),
+				'total'   => 0,
+				'message' => __( 'No leads found matching criteria.', 'ai-marketing-expert' ),
+			) );
+		}
+
+		global $wpdb;
+		$subscribers_table = $wpdb->prefix . 'aime_subscribers';
+
+		$leads = array();
+		foreach ( $parsed as $item ) {
+			if ( ! is_array( $item ) ) {
+				continue;
+			}
+			$email = sanitize_email( $item['email'] ?? '' );
+			if ( ! is_email( $email ) ) {
+				continue;
+			}
+
+			$domain = (string) ( $item['domain'] ?? '' );
+			if ( empty( $domain ) && false !== strpos( $email, '@' ) ) {
+				$parts  = explode( '@', $email );
+				$domain = (string) end( $parts );
+			}
+
+			// Validate DNS / MX deliverability.
+			$has_mx = EmailValidator::has_mailable_domain( $domain );
+
+			// Check if already in local database.
+			$existing_id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$subscribers_table} WHERE email = %s", $email ) );
+
+			$leads[] = array(
+				'first_name'    => sanitize_text_field( $item['first_name'] ?? '' ),
+				'last_name'     => sanitize_text_field( $item['last_name'] ?? '' ),
+				'company'       => sanitize_text_field( $item['company'] ?? '' ),
+				'title'         => sanitize_text_field( $item['title'] ?? '' ),
+				'domain'        => sanitize_text_field( $domain ),
+				'email'         => $email,
+				'location'      => sanitize_text_field( $item['location'] ?? '' ),
+				'website'       => esc_url_raw( $item['website'] ?? "https://{$domain}" ),
+				'phone'         => sanitize_text_field( $item['phone'] ?? '' ),
+				'confidence'    => sanitize_text_field( $item['confidence'] ?? '85%' ),
+				'mx_verified'   => $has_mx,
+				'is_in_crm'     => ( $existing_id > 0 ),
+				'subscriber_id' => $existing_id,
+			);
+		}
+
+		return new \WP_REST_Response( array(
+			'items' => $leads,
+			'total' => count( $leads ),
+		) );
+	}
+
+	/**
+	 * Import verified prospective leads into the subscriber CRM.
+	 */
+	public function import_leads( \WP_REST_Request $request ): \WP_REST_Response {
+		if ( ! aime_has_pro() ) {
+			return new \WP_REST_Response( array(
+				'code'    => 'pro_required',
+				'message' => __( 'B2B Lead Finder is a Pro feature. Please upgrade to Pro.', 'ai-marketing-expert' ),
+			), 403 );
+		}
+
+		global $wpdb;
+		$subscribers_table = $wpdb->prefix . 'aime_subscribers';
+		$now               = current_time( 'mysql', true );
+
+		$raw_leads = $request->get_param( 'leads' );
+		if ( ! is_array( $raw_leads ) || empty( $raw_leads ) ) {
+			return new \WP_REST_Response( array( 'message' => __( 'No leads provided to import.', 'ai-marketing-expert' ) ), 400 );
+		}
+
+		$list_id   = absint( $request->get_param( 'list_id' ) ?: 0 );
+		$tag_names = $request->get_param( 'tag_names' );
+		$tag_ids   = ( is_array( $tag_names ) && ! empty( $tag_names ) ) ? $this->resolve_tag_names( $tag_names ) : array();
+
+		$imported = 0;
+		$updated  = 0;
+		$invalid  = 0;
+
+		foreach ( $raw_leads as $lead ) {
+			if ( ! is_array( $lead ) ) {
+				continue;
+			}
+			$email = sanitize_email( $lead['email'] ?? '' );
+			if ( ! is_email( $email ) ) {
+				$invalid++;
+				continue;
+			}
+
+			// Validate with EmailValidator.
+			$val_check = EmailValidator::validate( $email, 'import' );
+			if ( is_wp_error( $val_check ) ) {
+				$invalid++;
+				continue;
+			}
+
+			$first_name = sanitize_text_field( $lead['first_name'] ?? '' );
+			$last_name  = sanitize_text_field( $lead['last_name'] ?? '' );
+			$company    = sanitize_text_field( $lead['company'] ?? '' );
+			$title      = sanitize_text_field( $lead['title'] ?? '' );
+			$website    = esc_url_raw( $lead['website'] ?? '' );
+
+			$existing = $wpdb->get_row( $wpdb->prepare( "SELECT id, status FROM {$subscribers_table} WHERE email = %s", $email ) );
+			if ( $existing ) {
+				$sub_id      = (int) $existing->id;
+				$update_data = array( 'updated_at' => $now );
+				if ( $first_name ) {
+					$update_data['first_name'] = $first_name;
+				}
+				if ( $last_name ) {
+					$update_data['last_name'] = $last_name;
+				}
+				$wpdb->update( $subscribers_table, $update_data, array( 'id' => $sub_id ) );
+				$updated++;
+			} else {
+				$insert_data = array(
+					'email'      => $email,
+					'first_name' => $first_name,
+					'last_name'  => $last_name,
+					'status'     => 'subscribed',
+					'source'     => 'lead_finder',
+					'hash'       => md5( $email . wp_generate_uuid4() ),
+					'created_at' => $now,
+					'updated_at' => $now,
+				);
+				$ok = $wpdb->insert( $subscribers_table, $insert_data );
+				if ( ! $ok ) {
+					$invalid++;
+					continue;
+				}
+				$sub_id = (int) $wpdb->insert_id;
+				$imported++;
+				$this->log_activity( $sub_id, 'created', 'Imported via B2B Lead Finder' );
+			}
+
+			// Save custom metadata.
+			$meta_fields = array();
+			if ( $company ) {
+				$meta_fields['company'] = $company;
+			}
+			if ( $title ) {
+				$meta_fields['job_title'] = $title;
+			}
+			if ( $website ) {
+				$meta_fields['website'] = $website;
+			}
+			if ( ! empty( $meta_fields ) ) {
+				$this->save_meta( $sub_id, $meta_fields );
+			}
+
+			// Attach to list.
+			if ( $list_id > 0 ) {
+				$this->sync_pivot( $sub_id, array( $list_id ), 'list' );
+			}
+
+			// Attach tags.
+			if ( ! empty( $tag_ids ) ) {
+				$this->sync_pivot( $sub_id, $tag_ids, 'tag' );
+			}
+		}
+
+		return new \WP_REST_Response( array(
+			'imported' => $imported,
+			'updated'  => $updated,
+			'invalid'  => $invalid,
+			'message'  => sprintf(
+				/* translators: 1: imported count, 2: updated count */
+				__( '%1$d leads imported, %2$d existing contacts updated.', 'ai-marketing-expert' ),
+				$imported,
+				$updated
+			),
+		) );
+	}
+
+	/* ================================================================
+	 *  B2B LEAD AUTOPILOT PIPELINE
+	 * ============================================================= */
+
+	/**
+	 * Get current Autopilot configuration and execution statistics.
+	 */
+	public function get_autopilot_config( \WP_REST_Request $request ): \WP_REST_Response {
+		if ( ! aime_has_pro() ) {
+			return new \WP_REST_Response( array(
+				'code'    => 'pro_required',
+				'message' => __( 'B2B Lead Autopilot is a Pro feature.', 'ai-marketing-expert' ),
+			), 403 );
+		}
+
+		$config = get_option( 'aime_lead_autopilot_config', array() );
+		$defaults = array(
+			'enabled'            => false,
+			'mode'               => 'filters', // 'filters' | 'prompt'
+			'industry'           => '',
+			'role'               => '',
+			'location'           => '',
+			'company_size'       => '',
+			'keyword'            => '',
+			'prompt'             => '',
+			'daily_target'       => 25,
+			'target_list_id'     => 0,
+			'tag_names'          => array( 'AI-Autopilot' ),
+			'last_run'           => null,
+			'last_result'        => null,
+			'total_imported'     => 0,
+			'total_skipped_dup'  => 0,
+			'total_skipped_mx'   => 0,
+		);
+
+		return new \WP_REST_Response( array_merge( $defaults, is_array( $config ) ? $config : array() ) );
+	}
+
+	/**
+	 * Save Autopilot configuration.
+	 */
+	public function save_autopilot_config( \WP_REST_Request $request ): \WP_REST_Response {
+		if ( ! aime_has_pro() ) {
+			return new \WP_REST_Response( array(
+				'code'    => 'pro_required',
+				'message' => __( 'B2B Lead Autopilot is a Pro feature.', 'ai-marketing-expert' ),
+			), 403 );
+		}
+
+		$current = get_option( 'aime_lead_autopilot_config', array() );
+		$current = is_array( $current ) ? $current : array();
+
+		$enabled      = (bool) $request->get_param( 'enabled' );
+		$mode         = sanitize_text_field( $request->get_param( 'mode' ) ?: 'filters' );
+		$industry     = sanitize_text_field( $request->get_param( 'industry' ) ?? '' );
+		$role         = sanitize_text_field( $request->get_param( 'role' ) ?? '' );
+		$location     = sanitize_text_field( $request->get_param( 'location' ) ?? '' );
+		$company_size = sanitize_text_field( $request->get_param( 'company_size' ) ?? '' );
+		$keyword      = sanitize_text_field( $request->get_param( 'keyword' ) ?? '' );
+		$prompt       = sanitize_textarea_field( $request->get_param( 'prompt' ) ?? '' );
+		$daily_target = min( 500, max( 5, absint( $request->get_param( 'daily_target' ) ?: 25 ) ) );
+		$target_list  = absint( $request->get_param( 'target_list_id' ) ?: 0 );
+
+		$raw_tags = $request->get_param( 'tag_names' );
+		if ( is_string( $raw_tags ) ) {
+			$tag_names = array_filter( array_map( 'trim', explode( ',', $raw_tags ) ) );
+		} elseif ( is_array( $raw_tags ) ) {
+			$tag_names = array_filter( array_map( 'sanitize_text_field', $raw_tags ) );
+		} else {
+			$tag_names = array( 'AI-Autopilot' );
+		}
+
+		$new_config = array_merge( $current, array(
+			'enabled'        => $enabled,
+			'mode'           => in_array( $mode, array( 'filters', 'prompt' ), true ) ? $mode : 'filters',
+			'industry'       => $industry,
+			'role'           => $role,
+			'location'       => $location,
+			'company_size'   => $company_size,
+			'keyword'        => $keyword,
+			'prompt'         => $prompt,
+			'daily_target'   => $daily_target,
+			'target_list_id' => $target_list,
+			'tag_names'      => array_values( $tag_names ),
+		) );
+
+		update_option( 'aime_lead_autopilot_config', $new_config );
+
+		return new \WP_REST_Response( array(
+			'success' => true,
+			'message' => __( 'Autopilot configuration saved successfully.', 'ai-marketing-expert' ),
+			'config'  => $new_config,
+		) );
+	}
+
+	/**
+	 * Trigger manual test run of the Autopilot pipeline.
+	 */
+	public function run_autopilot( \WP_REST_Request $request ): \WP_REST_Response {
+		if ( ! aime_has_pro() ) {
+			return new \WP_REST_Response( array(
+				'code'    => 'pro_required',
+				'message' => __( 'B2B Lead Autopilot is a Pro feature.', 'ai-marketing-expert' ),
+			), 403 );
+		}
+
+		$config = get_option( 'aime_lead_autopilot_config', array() );
+		if ( ! is_array( $config ) ) {
+			$config = array();
+		}
+
+		// Support direct execution using parameters passed in the request body
+		$param_role     = $request->get_param( 'role' );
+		$param_industry = $request->get_param( 'industry' );
+		$param_keyword  = $request->get_param( 'keyword' );
+		$param_prompt   = $request->get_param( 'prompt' );
+
+		if ( null !== $param_role || null !== $param_industry || null !== $param_keyword || null !== $param_prompt ) {
+			$config = array(
+				'enabled'        => (bool) ( $request->get_param( 'enabled' ) ?? ( $config['enabled'] ?? true ) ),
+				'mode'           => sanitize_text_field( $request->get_param( 'mode' ) ?? ( $config['mode'] ?? 'filters' ) ),
+				'industry'       => sanitize_text_field( $param_industry ?? ( $config['industry'] ?? '' ) ),
+				'role'           => sanitize_text_field( $param_role ?? ( $config['role'] ?? '' ) ),
+				'location'       => sanitize_text_field( $request->get_param( 'location' ) ?? ( $config['location'] ?? '' ) ),
+				'company_size'   => sanitize_text_field( $request->get_param( 'company_size' ) ?? ( $config['company_size'] ?? '' ) ),
+				'keyword'        => sanitize_text_field( $param_keyword ?? ( $config['keyword'] ?? '' ) ),
+				'prompt'         => sanitize_textarea_field( $param_prompt ?? ( $config['prompt'] ?? '' ) ),
+				'daily_target'   => min( 250, max( 5, absint( $request->get_param( 'daily_target' ) ?: ( $config['daily_target'] ?? 25 ) ) ) ),
+				'target_list_id' => absint( $request->get_param( 'target_list_id' ) ?: ( $config['target_list_id'] ?? 0 ) ),
+				'tag_names'      => sanitize_text_field( $request->get_param( 'tag_names' ) ?? ( $config['tag_names'] ?? 'AI-Autopilot' ) ),
+			);
+			update_option( 'aime_lead_autopilot_config', $config );
+		}
+
+		$has_filter_rules = ! empty( $config['industry'] ) || ! empty( $config['role'] ) || ! empty( $config['keyword'] );
+		$has_prompt_rules = ( 'prompt' === ( $config['mode'] ?? '' ) ) && ! empty( $config['prompt'] );
+
+		if ( ! $has_filter_rules && ! $has_prompt_rules ) {
+			return new \WP_REST_Response( array(
+				'message' => __( 'Autopilot is not configured yet. Please select at least an Industry, Job Role, Keyword, or AI Prompt.', 'ai-marketing-expert' ),
+			), 400 );
+		}
+
+		$result = $this->execute_autopilot_pipeline( $config, true );
+
+		return new \WP_REST_Response( array(
+			'success' => true,
+			'result'  => $result,
+			'message' => sprintf(
+				/* translators: 1: imported count, 2: skipped duplicates, 3: skipped MX */
+				__( 'Autopilot completed! %1$d verified leads imported, %2$d duplicates skipped, %3$d unverified domains skipped.', 'ai-marketing-expert' ),
+				$result['imported'] ?? 0,
+				$result['skipped_duplicates'] ?? 0,
+				$result['skipped_mx'] ?? 0
+			),
+		) );
+	}
+
+	/**
+	 * Invoked daily by WP-Cron scheduler.
+	 */
+	public function run_scheduled_autopilot(): void {
+		$config = get_option( 'aime_lead_autopilot_config', array() );
+		if ( ! is_array( $config ) || empty( $config['enabled'] ) ) {
+			return;
+		}
+
+		$this->execute_autopilot_pipeline( $config, false );
+	}
+
+	/**
+	 * Core Autopilot Pipeline with 3-tier deduplication & DNS MX verification.
+	 */
+	public function execute_autopilot_pipeline( array $config, bool $force = false ): array {
+		global $wpdb;
+		$subscribers_table = $wpdb->prefix . 'aime_subscribers';
+		$now               = current_time( 'mysql', true );
+
+		$daily_target = min( 500, max( 5, absint( $config['daily_target'] ?? 25 ) ) );
+		$mode         = ( 'prompt' === ( $config['mode'] ?? 'filters' ) ) ? 'prompt' : 'filters';
+		$target_list  = absint( $config['target_list_id'] ?? 0 );
+		$tag_names    = (array) ( $config['tag_names'] ?? array( 'AI-Autopilot' ) );
+		$tag_ids      = ! empty( $tag_names ) ? $this->resolve_tag_names( $tag_names ) : array();
+
+		$imported_count           = 0;
+		$skipped_duplicates_count = 0;
+		$skipped_mx_count         = 0;
+		$attempt                  = 0;
+		$max_attempts             = 4;
+		$seen_domains             = array();
+
+		while ( $imported_count < $daily_target && $attempt < $max_attempts ) {
+			$attempt++;
+			$needed = $daily_target - $imported_count;
+			// Request a sensible batch with buffer for invalid MX or duplicates.
+			$batch_limit = min( 25, max( 5, $needed + 5 ) );
+
+			// Build AI prompt based on mode.
+			if ( 'prompt' === $mode && ! empty( $config['prompt'] ) ) {
+				$prompt_base = "Generate {$batch_limit} realistic, high-intent B2B prospect profiles matching this exact specification:\n" .
+					$config['prompt'] . "\n";
+			} else {
+				$criteria = array();
+				if ( ! empty( $config['industry'] ) ) {
+					$criteria[] = "Industry: {$config['industry']}";
+				}
+				if ( ! empty( $config['role'] ) ) {
+					$criteria[] = "Job Role / Title: {$config['role']}";
+				}
+				if ( ! empty( $config['location'] ) ) {
+					$criteria[] = "Target Location: {$config['location']}";
+				}
+				if ( ! empty( $config['company_size'] ) ) {
+					$criteria[] = "Company Size: {$config['company_size']}";
+				}
+				if ( ! empty( $config['keyword'] ) ) {
+					$criteria[] = "Keywords / Focus: {$config['keyword']}";
+				}
+
+				$prompt_base = sprintf(
+					"Generate %d realistic, highly targeted B2B prospect profiles matching these criteria:\n%s\n",
+					$batch_limit,
+					implode( "\n", $criteria )
+				);
+			}
+
+			// Add exclusion constraints if we have already encountered domains in previous loops.
+			if ( ! empty( $seen_domains ) ) {
+				$sample_exclude = array_slice( array_unique( $seen_domains ), -15 );
+				$prompt_base   .= "\nDO NOT include any prospects from these domains:\n" . implode( ', ', $sample_exclude ) . "\n";
+			}
+
+			$full_prompt = $prompt_base .
+				"\nReturn ONLY a valid JSON object with a \"leads\" array conforming to this exact structure:\n" .
+				"{\n" .
+				"  \"leads\": [\n" .
+				"    {\n" .
+				"      \"first_name\": \"string\",\n" .
+				"      \"last_name\": \"string\",\n" .
+				"      \"company\": \"string\",\n" .
+				"      \"title\": \"string\",\n" .
+				"      \"domain\": \"string (valid company domain, e.g. acme-corp.com)\",\n" .
+				"      \"email\": \"string (valid corporate email e.g. first.last@domain)\",\n" .
+				"      \"location\": \"string (city/country)\",\n" .
+				"      \"website\": \"string (https://domain)\",\n" .
+				"      \"confidence\": \"string (e.g. 90%%)\"\n" .
+				"    }\n" .
+				"  ]\n" .
+				"}\n" .
+				"Important: Return ONLY the JSON object. Do not include markdown formatting, code fences, or explanations.";
+
+			$ai_res = \WPSpace\AiMarketingExpert\AiProvider::generate( $full_prompt, 'text', 6000, array( 'json_mode' => true ) );
+			if ( empty( $ai_res['success'] ) ) {
+				break;
+			}
+
+			$raw_json = (string) ( $ai_res['content'] ?? '' );
+			$parsed   = aime_parse_ai_json( $raw_json );
+			if ( ! is_array( $parsed ) ) {
+				$parsed = json_decode( $raw_json, true );
+			}
+			if ( isset( $parsed['leads'] ) && is_array( $parsed['leads'] ) ) {
+				$parsed = $parsed['leads'];
+			} elseif ( isset( $parsed['prospects'] ) && is_array( $parsed['prospects'] ) ) {
+				$parsed = $parsed['prospects'];
+			} elseif ( isset( $parsed['data'] ) && is_array( $parsed['data'] ) ) {
+				$parsed = $parsed['data'];
+			} elseif ( isset( $parsed['email'] ) ) {
+				$parsed = array( $parsed );
+			}
+
+			// Robust fallback: extract individual valid JSON objects if response was partially cut off or wrapped
+			if ( ! is_array( $parsed ) || empty( $parsed ) ) {
+				$recovered = array();
+				if ( preg_match_all( '/\{[^{}]*?"email"\s*:\s*"[^"]+?"[^{}]*?\}/s', $raw_json, $matches ) ) {
+					foreach ( $matches[0] as $match ) {
+						$item = json_decode( $match, true );
+						if ( is_array( $item ) && ! empty( $item['email'] ) ) {
+							$recovered[] = $item;
+						}
+					}
+				}
+				if ( ! empty( $recovered ) ) {
+					$parsed = $recovered;
+				}
+			}
+
+			if ( ! is_array( $parsed ) || empty( $parsed ) ) {
+				continue;
+			}
+
+			foreach ( $parsed as $item ) {
+				if ( $imported_count >= $daily_target ) {
+					break 2;
+				}
+				if ( ! is_array( $item ) ) {
+					continue;
+				}
+
+				$email = sanitize_email( $item['email'] ?? '' );
+				if ( ! is_email( $email ) ) {
+					continue;
+				}
+
+				$domain = strtolower( trim( (string) ( $item['domain'] ?? '' ) ) );
+				if ( empty( $domain ) && false !== strpos( $email, '@' ) ) {
+					$parts  = explode( '@', $email );
+					$domain = (string) end( $parts );
+				}
+				$domain = preg_replace( '#^https?://#i', '', $domain );
+				$domain = trim( $domain, '/' );
+
+				if ( isset( $seen_domains[ $domain ] ) ) {
+					$skipped_duplicates_count++;
+					continue;
+				}
+				$seen_domains[ $domain ] = true;
+
+				// 1. Live DNS MX Deliverability Verification.
+				if ( ! EmailValidator::has_mailable_domain( $domain ) ) {
+					$skipped_mx_count++;
+					continue;
+				}
+
+				// 2. Multi-tier CRM Deduplication Check (all statuses).
+				$existing_id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$subscribers_table} WHERE email = %s", $email ) );
+				if ( $existing_id > 0 ) {
+					$skipped_duplicates_count++;
+					continue;
+				}
+
+				// 3. Ingest Fresh Verified Lead.
+				$first_name = sanitize_text_field( $item['first_name'] ?? '' );
+				$last_name  = sanitize_text_field( $item['last_name'] ?? '' );
+				$company    = sanitize_text_field( $item['company'] ?? '' );
+				$title      = sanitize_text_field( $item['title'] ?? '' );
+				$website    = esc_url_raw( $item['website'] ?? ( $domain ? "https://{$domain}" : '' ) );
+
+				$insert_data = array(
+					'email'      => $email,
+					'first_name' => $first_name,
+					'last_name'  => $last_name,
+					'status'     => 'subscribed',
+					'source'     => 'lead_autopilot',
+					'hash'       => md5( $email . wp_generate_uuid4() ),
+					'created_at' => $now,
+					'updated_at' => $now,
+				);
+
+				$ok = $wpdb->insert( $subscribers_table, $insert_data );
+				if ( ! $ok ) {
+					continue;
+				}
+
+				$sub_id = (int) $wpdb->insert_id;
+				$imported_count++;
+
+				// Store custom metadata.
+				$meta = array();
+				if ( $company ) {
+					$meta['company'] = $company;
+				}
+				if ( $title ) {
+					$meta['job_title'] = $title;
+				}
+				if ( $website ) {
+					$meta['website'] = $website;
+				}
+				if ( ! empty( $meta ) ) {
+					$this->save_meta( $sub_id, $meta );
+				}
+
+				// Attach to target list & fire automation funnel trigger.
+				if ( $target_list > 0 ) {
+					$this->sync_pivot( $sub_id, array( $target_list ), 'list' );
+					do_action( 'aime_subscriber_list_added', $sub_id, $target_list, 'list' );
+				}
+
+				// Attach tags & fire tag trigger.
+				if ( ! empty( $tag_ids ) ) {
+					$this->sync_pivot( $sub_id, $tag_ids, 'tag' );
+					do_action( 'aime_subscriber_tag_added', $sub_id, $tag_ids[0], 'tag' );
+				}
+
+				$this->log_activity( $sub_id, 'created', 'Imported via B2B Lead Autopilot' );
+			}
+		}
+
+		// Update option with latest run metrics.
+		$config['last_run']           = $now;
+		$config['last_result']        = array(
+			'imported'           => $imported_count,
+			'skipped_duplicates' => $skipped_duplicates_count,
+			'skipped_mx'         => $skipped_mx_count,
+			'status'             => 'completed',
+			'timestamp'          => time(),
+		);
+		$config['total_imported']     = ( $config['total_imported'] ?? 0 ) + $imported_count;
+		$config['total_skipped_dup']  = ( $config['total_skipped_dup'] ?? 0 ) + $skipped_duplicates_count;
+		$config['total_skipped_mx']   = ( $config['total_skipped_mx'] ?? 0 ) + $skipped_mx_count;
+
+		update_option( 'aime_lead_autopilot_config', $config );
+
+		return array(
+			'imported'           => $imported_count,
+			'skipped_duplicates' => $skipped_duplicates_count,
+			'skipped_mx'         => $skipped_mx_count,
+			'target'             => $daily_target,
+			'timestamp'          => $now,
+		);
+	}
 }
+

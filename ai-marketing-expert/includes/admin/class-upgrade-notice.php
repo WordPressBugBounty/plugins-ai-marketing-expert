@@ -19,8 +19,9 @@ class UpgradeNotice {
 
 	/**
 	 * Meta key used to store notice dismissal.
+	 * Versioned (v2) to ensure old users who previously dismissed v1 will receive the price increase notice.
 	 */
-	const DISMISS_META_KEY = 'aime_pro_notice_dismissed';
+	const DISMISS_META_KEY = 'aime_pro_notice_v2_dismissed';
 
 	/**
 	 * AJAX action name.
@@ -53,13 +54,16 @@ class UpgradeNotice {
 			return false;
 		}
 
-		// Never display if Pro is already active.
-		if ( aime_has_pro() ) {
+		// Allow previewing notice via URL param: ?aime_preview_notice=1 (convenient for development/testing).
+		$force_preview = ( isset( $_GET['aime_preview_notice'] ) && '1' === (string) $_GET['aime_preview_notice'] );
+
+		// Never display if Pro is already active (unless force preview is active or filter is applied).
+		if ( ! $force_preview && aime_has_pro() && ! apply_filters( 'aime_show_upgrade_notice_on_pro', false ) ) {
 			return false;
 		}
 
-		// Check if dismissed by the current user.
-		if ( get_user_meta( get_current_user_id(), self::DISMISS_META_KEY, true ) ) {
+		// Check if dismissed by the current user (v2 key ensures fresh display to users who dismissed v1).
+		if ( ! $force_preview && get_user_meta( get_current_user_id(), self::DISMISS_META_KEY, true ) ) {
 			return false;
 		}
 
@@ -151,6 +155,12 @@ class UpgradeNotice {
 				'highlight' => true,
 			),
 			array(
+				'icon'      => '🎯',
+				'bold'      => __( 'New', 'ai-marketing-expert' ),
+				'text'      => __( 'B2B Lead Finder', 'ai-marketing-expert' ),
+				'highlight' => true,
+			),
+			array(
 				'icon'      => '🧠',
 				'bold'      => __( 'Unlimited', 'ai-marketing-expert' ),
 				'text'      => __( 'Free AI Fallback', 'ai-marketing-expert' ),
@@ -188,9 +198,10 @@ class UpgradeNotice {
 			<div class="aime-pro-notice-wrap">
 				<div class="aime-pro-notice-header">
 					<div class="aime-pro-notice-tags">
-						<span class="aime-notice-badge aime-badge-milestone">
-							<span class="aime-badge-icon">🎉</span>
-							<?php esc_html_e( '1,000+ Active Installs Milestone', 'ai-marketing-expert' ); ?>
+						<span class="aime-notice-badge aime-badge-urgent">
+							<span class="aime-badge-pulse-urgent"></span>
+							<span class="aime-badge-fire">⚠️</span>
+							<?php esc_html_e( 'Price Increase Soon', 'ai-marketing-expert' ); ?>
 						</span>
 						<span class="aime-notice-badge aime-badge-deal">
 							<span class="aime-badge-pulse"></span>
@@ -199,7 +210,7 @@ class UpgradeNotice {
 							echo wp_kses(
 								sprintf(
 									/* translators: 1: original price, 2: discounted price */
-									__( 'Special Deal: <del>%1$s</del> <strong>%2$s/yr</strong> <span class="aime-save-pill">Save $10</span>', 'ai-marketing-expert' ),
+									__( 'Early-Bird Deal: <del>%1$s</del> <strong>%2$s/yr</strong> <span class="aime-save-pill">Lock in $39</span>', 'ai-marketing-expert' ),
 									'$49',
 									'$39'
 								),
@@ -213,6 +224,10 @@ class UpgradeNotice {
 							);
 							?>
 						</span>
+						<span class="aime-notice-badge aime-badge-milestone">
+							<span class="aime-badge-icon">🎉</span>
+							<?php esc_html_e( '1,000+ Active Installs Milestone', 'ai-marketing-expert' ); ?>
+						</span>
 					</div>
 
 					<h3 class="aime-pro-notice-title">
@@ -222,7 +237,7 @@ class UpgradeNotice {
 					<p class="aime-pro-notice-desc">
 						<?php
 						echo wp_kses(
-							__( 'Unlock multi-step workflow automation, <strong class="aime-desc-highlight">unlimited free AI with auto-fallback &amp; rotation</strong> (Gemini, OpenRouter, OpenCode Zen &amp; all other free AI models), $0 free SMTP email sending, custom chatbots, and deep SEO intelligence to skyrocket your visitors, traffic, and sales on autopilot.', 'ai-marketing-expert' ),
+							__( '<strong>Price Increase Alert:</strong> With our major AI Workflow Automation engine &amp; B2B Lead Finder rolling out, Pro pricing is going up soon. <strong class="aime-desc-highlight">Lock in your special $39/year rate today</strong> to secure unlimited free AI auto-fallback, $0 SMTP email rotation, custom chatbots, and deep SEO intelligence before the price increases permanently.', 'ai-marketing-expert' ),
 							array(
 								'strong' => array(
 									'class' => array(),
@@ -246,7 +261,7 @@ class UpgradeNotice {
 					<div class="aime-pro-notice-actions">
 						<a href="<?php echo esc_url( $quick_buy_url ); ?>" class="button button-primary aime-btn-quickbuy" target="_blank" rel="noopener noreferrer">
 							<span class="aime-btn-bolt">⚡</span>
-							<?php esc_html_e( 'Quick Buy Single Site - $39', 'ai-marketing-expert' ); ?>
+							<?php esc_html_e( 'Lock In $39 / Year — Buy Before Price Increase', 'ai-marketing-expert' ); ?>
 						</a>
 
 						<a href="<?php echo esc_url( $pricing_url ); ?>" class="button button-secondary aime-btn-plans" target="_blank" rel="noopener noreferrer">

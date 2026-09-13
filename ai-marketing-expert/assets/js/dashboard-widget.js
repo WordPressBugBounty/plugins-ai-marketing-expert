@@ -79,6 +79,7 @@
 
 	function buildFeedHTML(items) {
 		var html = '';
+		var baseUrl = (aimeWidgetData.chatbotUrl || 'admin.php?page=ai-marketing-expert-chatbot');
 		for (var i = 0; i < items.length; i++) {
 			var c = items[i];
 			var dotClass = c.status === 'active' ? 'aime-dw__feed-dot--green' : 'aime-dw__feed-dot--orange';
@@ -87,13 +88,15 @@
 			if (c.page_url) {
 				try { pagePath = new URL(c.page_url).pathname; } catch (e) { pagePath = c.page_url; }
 			}
-			html += '<div class="' + itemClass + '">';
+			var convUrl = baseUrl + '#conversation/' + c.id;
+			html += '<a href="' + escapeHTML(convUrl) + '" class="' + itemClass + '" title="Open conversation with ' + escapeHTML(c.visitor_name) + '">';
 			html += '<span class="aime-dw__feed-dot ' + dotClass + '"></span>';
 			html += '<span class="aime-dw__feed-name">' + escapeHTML(c.visitor_name) + '</span>';
 			if (pagePath) html += '<span class="aime-dw__feed-page">' + escapeHTML(pagePath) + '</span>';
 			html += '<span class="aime-dw__feed-meta">' + c.msg_count + ' msg' + (c.msg_count !== 1 ? 's' : '') + '</span>';
 			html += '<span class="aime-dw__feed-time">' + escapeHTML(c.time_ago || '') + '</span>';
-			html += '</div>';
+			html += '<span class="dashicons dashicons-arrow-right-alt2 aime-dw__feed-arrow" aria-hidden="true"></span>';
+			html += '</a>';
 		}
 		return html;
 	}

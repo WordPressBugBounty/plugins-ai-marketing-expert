@@ -103,8 +103,10 @@ class ChatbotModule extends Module {
 		}
 		add_action( 'aime_chatbot_daily_cleanup', array( $this, 'daily_cleanup' ) );
 
-		// Auto-index on post save.
+		// Auto-index on post save (Knowledge Base real-time sync).
 		add_action( 'save_post', array( $this, 'on_post_save' ), 20, 2 );
+		add_action( 'aime_chatbot_index_post', array( Services\KnowledgeIndexer::class, 'index_single_post' ) );
+		add_action( 'before_delete_post', array( Services\KnowledgeIndexer::class, 'remove_post_knowledge' ) );
 
 		// Public discussions shortcode (Pro).
 		add_shortcode( 'aime_discussions', array( $this, 'render_discussions_shortcode' ) );
@@ -849,13 +851,25 @@ class ChatbotModule extends Module {
 			return;
 		}
 
-		if ( ! in_array( $post->post_type, array( 'post', 'page' ), true ) ) {
+		$settings  = get_option( 'aime_chatbot_settings', array() );
+		$auto_sync = ! isset( $settings['auto_sync_knowledge'] ) || ! empty( $settings['auto_sync_knowledge'] );
+		if ( ! $auto_sync ) {
 			return;
 		}
 
-		// Schedule re-index so it doesn't slow down the save.
-		wp_schedule_single_event( time() + 10, 'aime_chatbot_index_post', array( $post_id ) );
-		add_action( 'aime_chatbot_index_post', array( Services\KnowledgeIndexer::class, 'index_single_post' ) );
+		$allowed_types = array( 'post', 'page' );
+		if ( class_exists( 'WooCommerce' ) ) {
+			$allowed_types[] = 'product';
+		}
+
+		if ( ! in_array( $post->post_type, $allowed_types, true ) ) {
+			return;
+		}
+
+		// Schedule background re-index or trigger so it doesn't slow down the save.
+		if ( ! wp_next_scheduled( 'aime_chatbot_index_post', array( $post_id ) ) ) {
+			wp_schedule_single_event( time() + 5, 'aime_chatbot_index_post', array( $post_id ) );
+		}
 	}
 
 	/* ── Daily cleanup cron ──────────────────────────── */

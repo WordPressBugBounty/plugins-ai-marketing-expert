@@ -464,8 +464,7 @@ class CampaignProcessor {
 				$wpdb->update( $campaign_emails_table, array( 'status' => 'failed', 'note' => 'Campaign not found' ), array( 'id' => $email->id ) );
 				return;
 			}
-			$body = $this->strip_template_unsubscribe_markup( (string) ( $campaign->email_body ?? '' ) );
-			$body = $this->parse_email_body( $body, $email );
+			$body = $this->parse_email_body( (string) ( $campaign->email_body ?? '' ), $email );
 			$body = $this->append_footer( $body, $email );
 			$body = $this->inject_tracking( $body, $email, $campaign );
 			$wpdb->update(
@@ -533,7 +532,24 @@ class CampaignProcessor {
 			return;
 		}
 
-		// Send attempt failed. Retry with exponential backoff up to a fixed cap so a
+		// Send attempt failed.
+		// If the recipient was marked bounced (e.g. 5xx hard bounce detected by SmtpProvider),
+		// abort retries immediately to protect sender domain and SMTP reputation.
+		$sub_status = $wpdb->get_var( $wpdb->prepare( 'SELECT status FROM %i WHERE id = %d', $subscribers_table, $email->subscriber_id ) );
+		if ( 'bounced' === $sub_status ) {
+			$wpdb->update(
+				$campaign_emails_table,
+				array(
+					'status'     => 'failed',
+					'note'       => 'Hard bounce: recipient address rejected by SMTP.',
+					'updated_at' => current_time( 'mysql', true ),
+				),
+				array( 'id' => $email->id )
+			);
+			return;
+		}
+
+		// Retry with exponential backoff up to a fixed cap so a
 		// transient SMTP error does not permanently drop the email, and the queue is
 		// not stuck retrying forever.
 		$attempts = (int) ( $email->retry_count ?? 0 ) + 1;
@@ -584,16 +600,45 @@ class CampaignProcessor {
 
 	private function parse_email_body( string $body, object $email ): string {
 		$replace = array(
-			'{{first_name}}'      => esc_html( $email->first_name ?? '' ),
-			'{{last_name}}'       => esc_html( $email->last_name ?? '' ),
-			'{{full_name}}'       => esc_html( trim( ( $email->first_name ?? '' ) . ' ' . ( $email->last_name ?? '' ) ) ),
-			'{{email}}'           => esc_html( $email->to_email ?? '' ),
-			'{{site_name}}'       => esc_html( get_bloginfo( 'name' ) ),
-			'{{site_url}}'        => esc_url( home_url() ),
-			'{{unsubscribe}}'     => $this->get_unsubscribe_url( $email ),
-			'{{unsubscribe_url}}' => $this->get_unsubscribe_url( $email ),
+			'{{first_name}}'          => esc_html( $email->first_name ?? '' ),
+			'{{last_name}}'           => esc_html( $email->last_name ?? '' ),
+			'{{full_name}}'           => esc_html( trim( ( $email->first_name ?? '' ) . ' ' . ( $email->last_name ?? '' ) ) ),
+			'{{email}}'               => esc_html( $email->to_email ?? '' ),
+			'{{site_name}}'           => esc_html( get_bloginfo( 'name' ) ),
+			'{{site_url}}'            => esc_url( home_url() ),
+			'{{unsubscribe}}'         => $this->get_unsubscribe_url( $email ),
+			'{{unsubscribe_url}}'     => $this->get_unsubscribe_url( $email ),
+			'{{company_name}}'        => esc_html( get_option( 'aime_company_name', get_bloginfo( 'name' ) ) ),
+			'{{company_address}}'     => esc_html( get_option( 'aime_company_address', '' ) ),
+			'{{view_in_browser_url}}' => esc_url( $this->get_web_view_url( $email ) ),
 		);
 		return str_replace( array_keys( $replace ), array_values( $replace ), $body );
+	}
+
+	/**
+	 * Ensure raw HTML emails include an unsubscribe mechanism for compliance.
+	 *
+	 * @param string $body  Parsed email HTML body.
+	 * @param object $email Email row.
+	 * @return string
+	 */
+	private function ensure_raw_html_unsubscribe( string $body, object $email ): string {
+		$unsub_url = $this->get_unsubscribe_url( $email );
+		if ( false !== stripos( $body, $unsub_url ) || false !== stripos( $body, 'unsubscribe' ) ) {
+			return $body;
+		}
+
+		$footer = sprintf(
+			'<div style="margin-top:24px;padding-top:12px;border-top:1px solid #e2e8f0;text-align:center;font-size:12px;color:#718096;"><a href="%s" style="color:#718096;text-decoration:underline;">%s</a></div>',
+			esc_url( $unsub_url ),
+			esc_html__( 'Unsubscribe from this list', 'ai-marketing-expert' )
+		);
+
+		if ( stripos( $body, '</body>' ) !== false ) {
+			return str_ireplace( '</body>', $footer . '</body>', $body );
+		}
+
+		return $body . $footer;
 	}
 
 	private function inject_tracking( string $body, object $email, ?object $campaign = null ): string {
@@ -686,23 +731,43 @@ class CampaignProcessor {
 	 * footer. Shared by the send queue, the template preview, and test mail so
 	 * every rendering of an email shows the same footer.
 	 *
+	 * If the email already contains a custom footer or unsubscribe link, duplicate
+	 * default footer markup is omitted, while ensuring mandatory Free branding.
+	 *
 	 * @param string $body            Email body HTML.
 	 * @param string $unsubscribe_url Absolute unsubscribe URL for this recipient.
 	 */
 	public static function render_with_footer( string $body, string $unsubscribe_url ): string {
+		$unsubscribe_url = esc_url( $unsubscribe_url );
+
+		// If the email already has its own custom footer or unsubscribe link,
+		// avoid appending a duplicate default footer card.
+		if ( self::has_custom_footer( $body ) ) {
+			// Free tier: mandatory AIME branding credit.
+			if ( ! aime_has_pro() ) {
+				$branding_token = 'wpthemespace.com/product/ai-marketing-expert';
+				if ( false === stripos( $body, $branding_token ) && false === stripos( $body, 'AI Marketing Expert WordPress Plugin' ) ) {
+					$branding_html = '<p class="aime-free-branding" style="margin:16px 0 0;text-align:center;color:#64748b;font-size:12px">Email sent by <a href="https://wpthemespace.com/product/ai-marketing-expert/" target="_blank" rel="noopener" style="color:#64748b;text-decoration:underline">AI Marketing Expert WordPress Plugin</a></p>';
+					$body = ( false !== stripos( $body, '</body>' ) )
+						? str_ireplace( '</body>', $branding_html . '</body>', $body )
+						: $body . $branding_html;
+				}
+			}
+			return $body;
+		}
+
 		$body             = self::strip_unsubscribe_markup( $body );
 		$footer           = wp_kses_post( get_option( 'aime_email_footer', '' ) );
 		$company_name     = sanitize_text_field( get_option( 'aime_company_name', '' ) );
 		$company_address  = sanitize_textarea_field( get_option( 'aime_company_address', '' ) );
 		$unsubscribe_text = sanitize_text_field( get_option( 'aime_unsubscribe_text', 'Unsubscribe' ) );
-		$unsubscribe_url  = esc_url( $unsubscribe_url );
 
 		// Build footer parts only from non-empty sources.
 		$footer_parts = array();
 
-		// Free tier: always include AIME branding.
+		// Free tier: mandatory AIME branding credit.
 		if ( ! aime_has_pro() ) {
-			$footer_parts[] = '<p style="margin:0 0 8px;color:#64748b;font-size:12px">Sent with <a href="https://wpthemespace.com/product/ai-marketing-expert/" target="_blank" rel="noopener" style="color:#64748b;text-decoration:underline">AI Marketing Expert</a></p>';
+			$footer_parts[] = '<p class="aime-free-branding" style="margin:0 0 8px;color:#64748b;font-size:12px">Email sent by <a href="https://wpthemespace.com/product/ai-marketing-expert/" target="_blank" rel="noopener" style="color:#64748b;text-decoration:underline">AI Marketing Expert WordPress Plugin</a></p>';
 		}
 
 		// Add custom footer if not empty.
@@ -732,6 +797,33 @@ class CampaignProcessor {
 		}
 
 		return $body . $footer_html;
+	}
+
+	/**
+	 * Check if an email body already contains custom footer markup or an unsubscribe tag/link.
+	 *
+	 * @param string $body Email HTML.
+	 * @return bool
+	 */
+	public static function has_custom_footer( string $body ): bool {
+		if (
+			false !== stripos( $body, '{{unsubscribe}}' ) ||
+			false !== stripos( $body, '{{unsubscribe_url}}' ) ||
+			false !== stripos( $body, 'aime_track=unsubscribe' ) ||
+			false !== stripos( $body, 'aime_track%3Dunsubscribe' )
+		) {
+			return true;
+		}
+
+		if ( preg_match( '/<a\b[^>]*href=["\'][^"\']*["\'][^>]*>.*?unsubscribe.*?<\/a>/is', $body ) ) {
+			return true;
+		}
+
+		if ( preg_match( '/<(?:footer|div|td|table)\b[^>]*(?:class|id)=["\'][^"\']*\bfooter\b[^"\']*["\']/i', $body ) ) {
+			return true;
+		}
+
+		return false;
 	}
 
 	private function strip_template_unsubscribe_markup( string $body ): string {

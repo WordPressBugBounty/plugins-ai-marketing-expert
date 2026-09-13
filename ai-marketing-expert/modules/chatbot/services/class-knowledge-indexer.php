@@ -212,7 +212,7 @@ class KnowledgeIndexer {
 	 * ══════════════════════════════════════════════════════ */
 
 	/**
-	 * Re-index a single post across all bots that have wp_content knowledge.
+	 * Re-index a single post across all bots that have wp_content or woo_product knowledge.
 	 *
 	 * @param int $post_id WordPress post ID.
 	 */
@@ -226,40 +226,102 @@ class KnowledgeIndexer {
 		}
 
 		$indexer = new self();
-		$text    = $indexer->extract_text( $post );
-		$now     = current_time( 'mysql', true );
+		$is_product = ( 'product' === $post->post_type );
+		$type       = $is_product ? 'woo_product' : 'wp_content';
+		$text       = $is_product ? $indexer->extract_product_text( $post ) : $indexer->extract_text( $post );
+		$now        = current_time( 'mysql', true );
 
-		// Find all bots that have this post indexed.
+		// 1. Find all bots that already have this post indexed.
 		$existing = $wpdb->get_results( $wpdb->prepare(
-			"SELECT id, bot_id FROM {$p}aime_chatbot_knowledge WHERE source_id = %d AND type = 'wp_content'",
-			$post_id
+			"SELECT id, bot_id FROM {$p}aime_chatbot_knowledge WHERE source_id = %d AND type = %s",
+			$post_id,
+			$type
 		) );
 
-		foreach ( $existing as $entry ) {
-			if ( $text ) {
-				$wpdb->update(
+		if ( ! empty( $existing ) ) {
+			foreach ( $existing as $entry ) {
+				if ( $text ) {
+					$wpdb->update(
+						"{$p}aime_chatbot_knowledge",
+						array(
+							'content'         => $text,
+							'status'          => 'active',
+							'last_indexed_at' => $now,
+							'updated_at'      => $now,
+							'metadata'        => wp_json_encode( array(
+								'post_type' => $post->post_type,
+								'title'     => $post->post_title,
+								'url'       => get_permalink( $post_id ),
+							) ),
+						),
+						array( 'id' => $entry->id )
+					);
+				} else {
+					// Content empty — deactivate.
+					$wpdb->update(
+						"{$p}aime_chatbot_knowledge",
+						array( 'status' => 'inactive', 'updated_at' => $now ),
+						array( 'id' => $entry->id )
+					);
+				}
+			}
+			return;
+		}
+
+		// 2. Newly published post: auto-insert into knowledge base for all active bots.
+		if ( empty( $text ) ) {
+			return;
+		}
+
+		$active_bot_ids = $wpdb->get_col( "SELECT id FROM {$p}aime_chatbot_bots WHERE status = 'active'" );
+		if ( empty( $active_bot_ids ) ) {
+			return;
+		}
+
+		foreach ( $active_bot_ids as $bot_id ) {
+			$already = (int) $wpdb->get_var( $wpdb->prepare(
+				"SELECT id FROM {$p}aime_chatbot_knowledge WHERE bot_id = %d AND source_id = %d AND type = %s LIMIT 1",
+				$bot_id,
+				$post_id,
+				$type
+			) );
+
+			if ( ! $already ) {
+				$wpdb->insert(
 					"{$p}aime_chatbot_knowledge",
 					array(
+						'bot_id'          => (int) $bot_id,
+						'type'            => $type,
+						'source_id'       => $post_id,
 						'content'         => $text,
+						'status'          => 'active',
 						'last_indexed_at' => $now,
-						'updated_at'      => $now,
 						'metadata'        => wp_json_encode( array(
 							'post_type' => $post->post_type,
 							'title'     => $post->post_title,
 							'url'       => get_permalink( $post_id ),
 						) ),
-					),
-					array( 'id' => $entry->id )
-				);
-			} else {
-				// Post content is empty — deactivate.
-				$wpdb->update(
-					"{$p}aime_chatbot_knowledge",
-					array( 'status' => 'inactive', 'updated_at' => $now ),
-					array( 'id' => $entry->id )
+						'created_at'      => $now,
+						'updated_at'      => $now,
+					)
 				);
 			}
 		}
+	}
+
+	/**
+	 * Remove knowledge base entries when a post or product is deleted.
+	 *
+	 * @param int $post_id WordPress post ID.
+	 */
+	public static function remove_post_knowledge( int $post_id ): void {
+		global $wpdb;
+		$p = $wpdb->prefix;
+		$wpdb->delete(
+			"{$p}aime_chatbot_knowledge",
+			array( 'source_id' => $post_id ),
+			array( '%d' )
+		);
 	}
 
 	/* ── Text extraction helpers ─────────────────────── */
