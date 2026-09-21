@@ -34,8 +34,9 @@ class SeoAdapterService {
 	 * @param string $focus_keyword   Primary keyword.
 	 * @param string $meta_title      SEO title (<=60 chars ideally).
 	 * @param string $meta_desc       Meta description (<=160 chars ideally).
+	 * @param int    $seo_score       Optional initial or computed SEO score (0-100).
 	 */
-	public static function sync( int $post_id, string $focus_keyword = '', string $meta_title = '', string $meta_desc = '' ): void {
+	public static function sync( int $post_id, string $focus_keyword = '', string $meta_title = '', string $meta_desc = '', int $seo_score = 0 ): void {
 		if ( $post_id <= 0 || 'revision' === get_post_type( $post_id ) ) {
 			return;
 		}
@@ -51,6 +52,9 @@ class SeoAdapterService {
 		}
 		if ( '' !== $meta_desc ) {
 			update_post_meta( $post_id, self::META_DESC, $meta_desc );
+		}
+		if ( $seo_score > 0 ) {
+			self::set_seo_score( $post_id, $seo_score );
 		}
 
 		$package = array(
@@ -68,43 +72,37 @@ class SeoAdapterService {
 		$meta_title    = sanitize_text_field( (string) ( $package['meta_title'] ?? '' ) );
 		$meta_desc     = sanitize_textarea_field( (string) ( $package['meta_description'] ?? '' ) );
 
-		// Yoast SEO.
-		if ( defined( 'WPSEO_VERSION' ) || class_exists( 'WPSEO_Meta' ) ) {
-			if ( '' !== $meta_title ) {
-				update_post_meta( $post_id, '_yoast_wpseo_title', $meta_title );
-			}
-			if ( '' !== $meta_desc ) {
-				update_post_meta( $post_id, '_yoast_wpseo_metadesc', $meta_desc );
-			}
-			if ( '' !== $focus_keyword ) {
-				update_post_meta( $post_id, '_yoast_wpseo_focuskw', $focus_keyword );
-			}
+		// Yoast SEO (unconditional direct write so metadata is retained if activated later).
+		if ( '' !== $meta_title ) {
+			update_post_meta( $post_id, '_yoast_wpseo_title', $meta_title );
+		}
+		if ( '' !== $meta_desc ) {
+			update_post_meta( $post_id, '_yoast_wpseo_metadesc', $meta_desc );
+		}
+		if ( '' !== $focus_keyword ) {
+			update_post_meta( $post_id, '_yoast_wpseo_focuskw', $focus_keyword );
 		}
 
-		// Rank Math.
-		if ( defined( 'RANK_MATH_VERSION' ) || class_exists( 'RankMath' ) ) {
-			if ( '' !== $meta_title ) {
-				update_post_meta( $post_id, 'rank_math_title', $meta_title );
-			}
-			if ( '' !== $meta_desc ) {
-				update_post_meta( $post_id, 'rank_math_description', $meta_desc );
-			}
-			if ( '' !== $focus_keyword ) {
-				update_post_meta( $post_id, 'rank_math_focus_keyword', $focus_keyword );
-			}
+		// Rank Math (unconditional direct write so metadata is retained if activated later).
+		if ( '' !== $meta_title ) {
+			update_post_meta( $post_id, 'rank_math_title', $meta_title );
+		}
+		if ( '' !== $meta_desc ) {
+			update_post_meta( $post_id, 'rank_math_description', $meta_desc );
+		}
+		if ( '' !== $focus_keyword ) {
+			update_post_meta( $post_id, 'rank_math_focus_keyword', $focus_keyword );
 		}
 
-		// All in One SEO.
-		if ( defined( 'AIOSEO_VERSION' ) || class_exists( 'AIOSEO\\Plugin\\AIOSEO' ) ) {
-			if ( '' !== $meta_title ) {
-				update_post_meta( $post_id, '_aioseo_title', $meta_title );
-			}
-			if ( '' !== $meta_desc ) {
-				update_post_meta( $post_id, '_aioseo_description', $meta_desc );
-			}
-			if ( '' !== $focus_keyword ) {
-				update_post_meta( $post_id, '_aioseo_keywords', $focus_keyword );
-			}
+		// All in One SEO (unconditional direct write).
+		if ( '' !== $meta_title ) {
+			update_post_meta( $post_id, '_aioseo_title', $meta_title );
+		}
+		if ( '' !== $meta_desc ) {
+			update_post_meta( $post_id, '_aioseo_description', $meta_desc );
+		}
+		if ( '' !== $focus_keyword ) {
+			update_post_meta( $post_id, '_aioseo_keywords', $focus_keyword );
 		}
 
 		// SEOPress.
@@ -173,16 +171,44 @@ class SeoAdapterService {
 	 * Whether any known SEO plugin is active (frontend output suppresses itself).
 	 */
 	public static function has_seo_plugin(): bool {
+		$has_plugin = false;
 		if ( defined( 'WPSEO_VERSION' ) || defined( 'RANK_MATH_VERSION' ) || defined( 'AIOSEO_VERSION' ) || defined( 'SEOPRESS_VERSION' ) || defined( 'SLIM_SEO_VER' ) || defined( 'THE_SEO_FRAMEWORK_VERSION' ) ) {
-			return true;
+			$has_plugin = true;
+		} elseif ( class_exists( 'WPSEO_Meta' ) || class_exists( 'RankMath' ) || class_exists( 'SEOPress' ) ) {
+			$has_plugin = true;
+		} elseif ( has_action( 'wpseo_head' ) || has_action( 'rank_math/head' ) ) {
+			$has_plugin = true;
 		}
-		if ( class_exists( 'WPSEO_Meta' ) || class_exists( 'RankMath' ) || class_exists( 'SEOPress' ) ) {
-			return true;
+
+		/**
+		 * Filter whether an active SEO plugin is detected on the site.
+		 *
+		 * @param bool $has_plugin True if a known SEO plugin is detected.
+		 */
+		return (bool) apply_filters( 'aime_has_seo_plugin', $has_plugin );
+	}
+
+	/**
+	 * Sync SEO score across active SEO plugins and canonical meta.
+	 *
+	 * @param int $post_id WP post ID.
+	 * @param int $score   Score 0-100.
+	 */
+	public static function set_seo_score( int $post_id, int $score ): void {
+		if ( $post_id <= 0 ) {
+			return;
 		}
-		// has_action check avoids false negatives when constants are filtered.
-		if ( has_action( 'wpseo_head' ) || has_action( 'rank_math/head' ) ) {
-			return true;
+		$score = max( 0, min( 100, $score ) );
+		update_post_meta( $post_id, 'aime_seo_score', $score );
+
+		// Rank Math score column in WP admin.
+		if ( defined( 'RANK_MATH_VERSION' ) || class_exists( 'RankMath' ) ) {
+			update_post_meta( $post_id, 'rank_math_seo_score', $score );
 		}
-		return false;
+
+		// Yoast SEO score column in WP admin.
+		if ( defined( 'WPSEO_VERSION' ) || class_exists( 'WPSEO_Meta' ) ) {
+			update_post_meta( $post_id, '_yoast_wpseo_linkdex', $score );
+		}
 	}
 }

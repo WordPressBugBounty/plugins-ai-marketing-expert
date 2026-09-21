@@ -214,6 +214,7 @@ class ContentRestController {
 				'content'     => array( 'type' => 'string', 'required' => true, 'sanitize_callback' => 'aime_kses_article' ),
 				'instruction' => array( 'type' => 'string', 'default' => 'Improve this content for clarity and engagement', 'sanitize_callback' => 'sanitize_text_field' ),
 				'tone'        => array( 'type' => 'string', 'default' => 'professional', 'sanitize_callback' => 'sanitize_text_field' ),
+				'article_id'  => array( 'type' => 'integer', 'default' => 0, 'sanitize_callback' => 'absint' ),
 			),
 		) );
 

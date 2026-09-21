@@ -597,6 +597,19 @@ class CampaignController {
 
 		try {
 			( new CampaignProcessor() )->process( true );
+		} catch ( \Throwable $e ) {
+			if ( function_exists( 'aime_log' ) ) {
+				aime_log( 'CampaignProcessor process_tick error: ' . $e->getMessage(), 'error' );
+			}
+			$wpdb->update(
+				"{$p}aime_campaigns",
+				array(
+					'status'     => 'failed',
+					'note'       => sprintf( __( 'Processing error: %s', 'ai-marketing-expert' ), $e->getMessage() ),
+					'updated_at' => current_time( 'mysql', true ),
+				),
+				array( 'id' => $id, 'status' => 'sending' )
+			);
 		} finally {
 			delete_transient( $lock_key );
 		}

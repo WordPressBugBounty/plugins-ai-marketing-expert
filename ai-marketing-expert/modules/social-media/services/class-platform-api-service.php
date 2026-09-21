@@ -57,8 +57,9 @@ class PlatformApiService {
 
 		switch ( $account->platform ) {
 			case 'facebook':
-			case 'instagram':
 				return $this->validate_facebook_token( $access_token );
+			case 'instagram':
+				return $this->validate_instagram_token( $access_token );
 			case 'x':
 				return $this->validate_x_token( $account );
 			case 'linkedin':
@@ -189,14 +190,16 @@ class PlatformApiService {
 	 */
 	public function resolve_facebook_page_connection( string $access_token, string $provided_page_id = '' ): array {
 		// First try direct page-style resolution for a page access token.
+		// A Facebook Page object ALWAYS returns a 'category' field, while a personal User object does NOT.
 		$direct = wp_remote_get(
-			'https://graph.facebook.com/v25.0/me?fields=id,name,picture.width(100).height(100)&access_token=' . rawurlencode( $access_token ),
+			'https://graph.facebook.com/v25.0/me?fields=id,name,category,picture.width(100).height(100)&access_token=' . rawurlencode( $access_token ),
 			array( 'timeout' => 15 )
 		);
 
 		if ( ! is_wp_error( $direct ) ) {
 			$body = json_decode( wp_remote_retrieve_body( $direct ), true );
-			if ( ! empty( $body['id'] ) && empty( $body['error'] ) ) {
+			// If 'id' AND 'category' are present, it is definitively a direct Page Access Token.
+			if ( ! empty( $body['id'] ) && ! empty( $body['category'] ) && empty( $body['error'] ) ) {
 				return array(
 					'success'          => true,
 					'platform_user_id' => (string) $body['id'],
@@ -207,7 +210,7 @@ class PlatformApiService {
 			}
 		}
 
-		// If that did not resolve a usable page, treat it as a user token and fetch pages.
+		// If that did not resolve a usable page (i.e. User token or profile), treat it as a user token and fetch managed pages.
 		$response = wp_remote_get(
 			'https://graph.facebook.com/v25.0/me/accounts?fields=id,name,access_token,picture.width(100).height(100),tasks&access_token=' . rawurlencode( $access_token ),
 			array( 'timeout' => 15 )
@@ -225,7 +228,10 @@ class PlatformApiService {
 		}
 
 		if ( empty( $pages ) ) {
-			return array( 'success' => false, 'message' => __( 'No Facebook Pages were found for this token. Make sure the token has pages_show_list, pages_read_engagement, and pages_manage_posts permissions, and that the app is authorized for the Page.', 'ai-marketing-expert' ) );
+			return array(
+				'success' => false,
+				'message' => __( 'No Facebook Pages found for this token. If you used a User Token, make sure it has pages_show_list, pages_read_engagement, and pages_manage_posts permissions, and that your account is an Admin of the Page. Or switch to a Page Access Token in Graph API Explorer.', 'ai-marketing-expert' ),
+			);
 		}
 
 		$page = null;
@@ -238,20 +244,44 @@ class PlatformApiService {
 			}
 
 			if ( ! $page ) {
-				return array( 'success' => false, 'message' => __( 'The provided Facebook Page ID was not found for this token.', 'ai-marketing-expert' ) );
+				$available = array_map( static function ( $p ) {
+					return sprintf( '%s (ID: %s)', $p['name'] ?? 'Unknown', $p['id'] ?? '' );
+				}, $pages );
+				return array(
+					'success' => false,
+					'message' => sprintf(
+						/* translators: 1: provided ID, 2: list of available pages */
+						__( 'Page ID "%1$s" was not found. Available pages for this token: %2$s', 'ai-marketing-expert' ),
+						$provided_page_id,
+						implode( ', ', $available )
+					),
+				);
 			}
 		} elseif ( 1 === count( $pages ) ) {
 			$page = $pages[0];
 		} else {
-			return array( 'success' => false, 'message' => __( 'This token can access multiple Facebook Pages. Paste the specific Facebook Page ID in the optional Page ID field, or use a Page Access Token for just one Page.', 'ai-marketing-expert' ) );
+			$available = array_map( static function ( $p ) {
+				return sprintf( '%s (ID: %s)', $p['name'] ?? 'Unknown', $p['id'] ?? '' );
+			}, $pages );
+			return array(
+				'success' => false,
+				'message' => sprintf(
+					/* translators: %s: list of accessible pages */
+					__( 'This token can access multiple Facebook Pages: %s. Paste your specific Page ID in the optional Page ID field to connect.', 'ai-marketing-expert' ),
+					implode( ', ', $available )
+				),
+			);
 		}
+
+		// Ensure we extract the PAGE Access Token (which has posting rights) rather than keeping the user token.
+		$page_access_token = ! empty( $page['access_token'] ) ? $page['access_token'] : $access_token;
 
 		return array(
 			'success'          => true,
 			'platform_user_id' => (string) ( $page['id'] ?? '' ),
 			'name'             => $page['name'] ?? '',
 			'avatar_url'       => $page['picture']['data']['url'] ?? '',
-			'access_token'     => $page['access_token'] ?? $access_token,
+			'access_token'     => $page_access_token,
 		);
 	}
 
@@ -338,8 +368,13 @@ class PlatformApiService {
 			return array( 'success' => true, 'platform_post_id' => (string) $body['id'] );
 		}
 
-		$error_msg = $body['error']['message'] ?? __( 'Facebook publish failed.', 'ai-marketing-expert' );
-		$error_msg = preg_replace( '/\\n/', ' ', $error_msg );
+		$error_code = (int) ( $body['error']['code'] ?? 0 );
+		$error_msg  = $body['error']['message'] ?? __( 'Facebook publish failed.', 'ai-marketing-expert' );
+		$error_msg  = preg_replace( '/\\n/', ' ', $error_msg );
+
+		if ( 200 === $error_code ) {
+			$error_msg .= ' ' . __( '(Hint: The connected token lacks "pages_manage_posts" permission or is a personal User Token. Reconnect using a Page Access Token for your Facebook Page with pages_manage_posts and pages_read_engagement permissions.)', 'ai-marketing-expert' );
+		}
 
 		return array(
 			'success' => false,
@@ -349,8 +384,8 @@ class PlatformApiService {
 
 	private function validate_facebook_token( string $token ): array {
 		$response = wp_remote_get(
-			'https://graph.facebook.com/v25.0/me?access_token=' . $token,
-			array( 'timeout' => 10 )
+			'https://graph.facebook.com/v25.0/me?fields=id,name,category&access_token=' . rawurlencode( $token ),
+			array( 'timeout' => 12 )
 		);
 
 		if ( is_wp_error( $response ) ) {
@@ -358,7 +393,95 @@ class PlatformApiService {
 		}
 
 		$body = json_decode( wp_remote_retrieve_body( $response ), true );
-		return array( 'valid' => ! empty( $body['id'] ) );
+		if ( ! empty( $body['error'] ) ) {
+			return array(
+				'valid'   => false,
+				'message' => $body['error']['message'] ?? __( 'Facebook token validation failed.', 'ai-marketing-expert' ),
+			);
+		}
+
+		if ( empty( $body['id'] ) ) {
+			return array( 'valid' => false, 'message' => __( 'Could not identify Facebook account from token.', 'ai-marketing-expert' ) );
+		}
+
+		// Check if the token belongs to a Facebook Page (Pages always have a category).
+		if ( empty( $body['category'] ) ) {
+			return array(
+				'valid'   => false,
+				'message' => __( 'Connected as a personal user profile instead of a Facebook Page. Facebook only permits posting to Pages. Please reconnect using a Page Access Token.', 'ai-marketing-expert' ),
+			);
+		}
+
+		// Check permissions if available.
+		$perm_resp = wp_remote_get(
+			'https://graph.facebook.com/v25.0/me/permissions?access_token=' . rawurlencode( $token ),
+			array( 'timeout' => 10 )
+		);
+
+		if ( ! is_wp_error( $perm_resp ) ) {
+			$perm_body = json_decode( wp_remote_retrieve_body( $perm_resp ), true );
+			if ( ! empty( $perm_body['data'] ) && is_array( $perm_body['data'] ) ) {
+				$granted = array();
+				foreach ( $perm_body['data'] as $p ) {
+					if ( ( $p['status'] ?? '' ) === 'granted' && ! empty( $p['permission'] ) ) {
+						$granted[] = $p['permission'];
+					}
+				}
+
+				if ( ! empty( $granted ) && ! in_array( 'pages_manage_posts', $granted, true ) ) {
+					return array(
+						'valid'   => false,
+						'message' => sprintf(
+							/* translators: %s: page name */
+							__( 'Connected to Page "%s", but missing "pages_manage_posts" permission required for publishing.', 'ai-marketing-expert' ),
+							$body['name'] ?? ''
+						),
+					);
+				}
+			}
+		}
+
+		return array(
+			'valid'   => true,
+			'message' => sprintf(
+				/* translators: %s: page name */
+				__( 'Verified connection to Facebook Page: %s with publish permissions.', 'ai-marketing-expert' ),
+				$body['name'] ?? ''
+			),
+		);
+	}
+
+	private function validate_instagram_token( string $token ): array {
+		$response = wp_remote_get(
+			'https://graph.instagram.com/v25.0/me?fields=user_id,username,name&access_token=' . rawurlencode( $token ),
+			array( 'timeout' => 12 )
+		);
+
+		if ( is_wp_error( $response ) ) {
+			return array( 'valid' => false, 'message' => $response->get_error_message() );
+		}
+
+		$body = json_decode( wp_remote_retrieve_body( $response ), true );
+		if ( ! empty( $body['error'] ) ) {
+			return array(
+				'valid'   => false,
+				'message' => $body['error']['message'] ?? __( 'Instagram token validation failed.', 'ai-marketing-expert' ),
+			);
+		}
+
+		$ig_user_id = (string) ( $body['user_id'] ?? $body['id'] ?? '' );
+		if ( empty( $ig_user_id ) ) {
+			return array( 'valid' => false, 'message' => __( 'Could not identify Instagram account from token.', 'ai-marketing-expert' ) );
+		}
+
+		return array(
+			'valid'   => true,
+			'message' => sprintf(
+				/* translators: %s: account name */
+				__( 'Verified connection to Instagram account: %s.', 'ai-marketing-expert' ),
+				$body['name'] ?? $body['username'] ?? $ig_user_id
+			),
+		);
 	}
 
 	/* ------------------------------------------------------------------

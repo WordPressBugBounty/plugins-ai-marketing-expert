@@ -125,13 +125,15 @@ class TriggerRegistry {
 				$available = (bool) call_user_func( $def['available'] );
 			}
 			$out[] = array(
-				'key'            => $key,
-				'label'          => $def['label'] ?? $key,
-				'module'         => $def['module'] ?? '',
-				'description'    => $def['description'] ?? '',
-				'available'      => $available,
-				'fields'         => ActionRegistry::resolve_fields( $def['fields'] ?? array() ),
-				'payload_fields' => array_values( (array) ( $def['payload_fields'] ?? array() ) ),
+				'key'             => $key,
+				'label'           => $def['label'] ?? $key,
+				'module'          => $def['module'] ?? '',
+				'description'     => $def['description'] ?? '',
+				'available'       => $available,
+				'requires_plugin' => $def['requires_plugin'] ?? '',
+				'requires_label'  => $def['requires_label'] ?? '',
+				'fields'          => ActionRegistry::resolve_fields( $def['fields'] ?? array() ),
+				'payload_fields'  => array_values( (array) ( $def['payload_fields'] ?? array() ) ),
 			);
 		}
 		return $out;

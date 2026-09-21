@@ -84,6 +84,321 @@ class BuiltinTemplates {
 			),
 		);
 
+		$cutoff_min = (int) ( ( get_option( 'aime_settings', array() )['woo_cart_cutoff_minutes'] ?? 0 ) ?: 30 );
+
+		$templates['woo_cart_recovery'] = array(
+			'name'             => __( 'WooCommerce Cart Recovery', 'ai-marketing-expert' ),
+			'description'      => sprintf(
+				/* translators: %d: minutes of inactivity */
+				__( 'When a customer abandons their WooCommerce cart (after %d minutes of inactivity), sends a personalized recovery email with their 1-click restore link and notifies your team.', 'ai-marketing-expert' ),
+				$cutoff_min
+			),
+			'icon'             => 'shopping-cart',
+			'is_pro'           => false,
+			'requires_plugin'  => 'woocommerce',
+			'requires_modules' => array( 'email-marketing' ),
+			'workflow'         => array(
+				'name'          => __( 'WooCommerce Cart Recovery', 'ai-marketing-expert' ),
+				'description'   => sprintf(
+					/* translators: %d: minutes of inactivity */
+					__( 'Automatic abandoned cart recovery (triggers after %d minutes of inactivity) with 1-click restore link and store alert.', 'ai-marketing-expert' ),
+					$cutoff_min
+				),
+				'trigger_type'  => 'event',
+				'trigger_event' => 'woo_cart_abandoned',
+			),
+			'steps'            => array(
+				array(
+					'key'         => 'recovery_email',
+					'parent_key'  => '',
+					'branch'      => 'default',
+					'action_type' => 'send_email',
+					'config'      => array(
+						'to'      => '{event.email}',
+						'subject' => __( 'Still thinking it over, {event.customer_name}? Your cart is safely reserved! 🛒✨', 'ai-marketing-expert' ),
+						'body'    => __( "Hi {event.customer_name},\n\nWe noticed you were checking out some fantastic items, but got interrupted before completing your order!\n\n🛒 Saved In Your Cart:\n{event.product_names}\nTotal: {event.cart_total} {event.currency}\n\nGood news — we have held your items in your reserved cart so you won't lose your selection. Life gets busy, so we made it effortless to pick up right where you left off:\n\n<div style=\"margin: 18px 0;\">\n  <a href=\"{event.recovery_url}\" style=\"display:inline-block;background-color:#2563eb;color:#ffffff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;text-align:center;\">👉 Complete Your Order in 1-Click &raquo;</a>\n</div>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🌟 Why Shop With Us?\n✓ 100% Safe, Encrypted & Verified Checkout\n✓ Fast & Reliable Delivery Straight to Your Door\n✓ Friendly Customer Support Ready to Help\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nIf you ran into any checkout issues or have a quick question about your order, just reply directly to this email!\n\nWarmest regards,\n{workflow_name}", 'ai-marketing-expert' ),
+					),
+				),
+				array(
+					'key'         => 'notify_admin',
+					'parent_key'  => 'recovery_email',
+					'branch'      => 'default',
+					'action_type' => 'send_notification',
+					'config'      => array(
+						'subject' => __( 'Abandoned Cart Alert: {event.customer_name} ({event.cart_total} {event.currency})', 'ai-marketing-expert' ),
+						'body'    => __( "A customer abandoned their cart.\n\nCustomer: {event.customer_name}\nEmail: {event.email}\nTotal: {event.cart_total} {event.currency}\nItems: {event.product_names}\n\nA personalized recovery email with their 1-click restore link has been sent automatically.", 'ai-marketing-expert' ),
+					),
+				),
+			),
+		);
+
+		$templates['woo_smart_cart_recovery'] = array(
+			'name'             => __( 'WooCommerce Smart Cart Recovery (Branching & Single-Item Checkout)', 'ai-marketing-expert' ),
+			'description'      => sprintf(
+				/* translators: %d: minutes of inactivity */
+				__( 'Adaptive abandoned cart recovery (triggers after %d minutes of inactivity). Detects duplicate quantities or multiple products, offering direct 1-click single-item purchase links to eliminate checkout friction.', 'ai-marketing-expert' ),
+				$cutoff_min
+			),
+			'icon'             => 'shopping-cart',
+			'is_pro'           => true,
+			'requires_plugin'  => 'woocommerce',
+			'requires_modules' => array( 'email-marketing' ),
+			'workflow'         => array(
+				'name'          => __( 'WooCommerce Smart Cart Recovery', 'ai-marketing-expert' ),
+				'description'   => sprintf(
+					/* translators: %d: minutes of inactivity */
+					__( 'Smart abandoned cart recovery (triggers after %d minutes of inactivity) with automatic branching for duplicate quantities and 1-click single-item checkout.', 'ai-marketing-expert' ),
+					$cutoff_min
+				),
+				'trigger_type'  => 'event',
+				'trigger_event' => 'woo_cart_abandoned',
+			),
+			'steps'            => array(
+				array(
+					'key'         => 'check_cart_type',
+					'parent_key'  => '',
+					'branch'      => 'default',
+					'action_type' => 'condition',
+					'config'      => array(
+						'check' => 'event_field_equals',
+						'field' => 'cart_type',
+						'value' => 'duplicate_qty',
+					),
+				),
+				array(
+					'key'         => 'duplicate_qty_recovery_email',
+					'parent_key'  => 'check_cart_type',
+					'branch'      => 'yes',
+					'action_type' => 'send_email',
+					'config'      => array(
+						'to'      => '{event.email}',
+						'subject' => __( '🛒 Quick question, {event.customer_name}: Did you mean to add {event.product_names} more than once?', 'ai-marketing-expert' ),
+						'body'    => __( "Hi {event.customer_name},\n\nWe noticed you were checking out {event.product_names}, but left before completing your purchase.\n\nWhen reviewing your cart, we saw that multiple quantities were added (Cart Total: {event.cart_total} {event.currency}).\n\nIt happens all the time on mobile screens and fast clicks! If you only wanted to purchase a SINGLE item, you don't need to manually edit or adjust your cart — we've prepared an instant 1-click checkout for you:\n\n<div style=\"margin: 18px 0;\">\n  <a href=\"{event.single_qty_url}\" style=\"display:inline-block;background-color:#2563eb;color:#ffffff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;text-align:center;\">👉 Buy Just 1 Item (1-Click Fast Checkout)</a>\n</div>\n\nPrefer to get all of them and keep the full order? No problem:\n\n<div style=\"margin: 14px 0;\">\n  <a href=\"{event.recovery_url}\" style=\"display:inline-block;background-color:#0f172a;color:#ffffff;padding:10px 22px;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;text-align:center;\">👉 Restore Entire Cart &amp; Complete Order</a>\n</div>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🌟 Shop With Confidence:\n✓ 100% Secure & Encrypted Payment\n✓ Fast Dispatch & Reliable Tracking\n✓ Easy Returns & Dedicated Support\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nIf you had any questions or need a hand completing your order, simply reply to this email and our team will gladly assist you!\n\nWarm regards,\n{workflow_name}", 'ai-marketing-expert' ),
+					),
+				),
+				array(
+					'key'         => 'multi_or_single_recovery_email',
+					'parent_key'  => 'check_cart_type',
+					'branch'      => 'no',
+					'action_type' => 'send_email',
+					'config'      => array(
+						'to'      => '{event.email}',
+						'subject' => __( 'Can\'t decide or want just 1 item, {event.customer_name}? We\'ve made it easy! 🛍️✨', 'ai-marketing-expert' ),
+						'body'    => __( "Hi {event.customer_name},\n\nYou have fantastic taste! We noticed you left {event.product_names} waiting in your cart (Total: {event.cart_total} {event.currency}).\n\nDon't worry, your shopping bag is safely saved!\n\nIf you prefer to grab just ONE specific item today without committing to the full basket, click below to purchase that item directly in 1 click:\n\n{event.single_item_links}\n\nOr if you would like to take home your entire order:\n\n<div style=\"margin: 18px 0;\">\n  <a href=\"{event.recovery_url}\" style=\"display:inline-block;background-color:#0f172a;color:#ffffff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;text-align:center;\">👉 Restore Entire Cart &amp; Complete Checkout &raquo;</a>\n</div>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🌟 Why Shop With Us?\n✓ 100% Safe, Encrypted & Verified Checkout\n✓ Fast & Reliable Delivery Straight to Your Door\n✓ Friendly Customer Support Ready to Help\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nIf you ran into any issues or have questions about your order, just reply directly to this email!\n\nWarm regards,\n{workflow_name}", 'ai-marketing-expert' ),
+					),
+				),
+				array(
+					'key'         => 'notify_admin_dup',
+					'parent_key'  => 'duplicate_qty_recovery_email',
+					'branch'      => 'default',
+					'action_type' => 'send_notification',
+					'config'      => array(
+						'subject' => __( 'Abandoned Cart Alert (Duplicate Qty): {event.customer_name}', 'ai-marketing-expert' ),
+						'body'    => __( "A customer abandoned their cart with duplicate quantities.\n\nCustomer: {event.customer_name}\nEmail: {event.email}\nTotal: {event.cart_total} {event.currency}\nItems: {event.product_names}\n\nA single-quantity 1-click recovery email was automatically sent.", 'ai-marketing-expert' ),
+					),
+				),
+				array(
+					'key'         => 'notify_admin_standard',
+					'parent_key'  => 'multi_or_single_recovery_email',
+					'branch'      => 'default',
+					'action_type' => 'send_notification',
+					'config'      => array(
+						'subject' => __( 'Abandoned Cart Alert: {event.customer_name} ({event.cart_total} {event.currency})', 'ai-marketing-expert' ),
+						'body'    => __( "A customer abandoned their cart.\n\nCustomer: {event.customer_name}\nEmail: {event.email}\nTotal: {event.cart_total} {event.currency}\nItems: {event.product_names}\n\nA smart recovery email with individual item restore links was automatically sent.", 'ai-marketing-expert' ),
+					),
+				),
+			),
+		);
+
+		$templates['woo_advanced_smart_cart_recovery'] = array(
+			'name'             => __( 'WooCommerce Advanced Smart Cart Recovery (3-Way)', 'ai-marketing-expert' ),
+			'description'      => sprintf(
+				/* translators: %d: minutes of inactivity */
+				__( 'High-converting 3-way cart recovery (triggers after %d minutes of inactivity): branches on duplicate quantities (1-click single-qty checkout), multiple products (individual product buy links), and single items (direct cart restore).', 'ai-marketing-expert' ),
+				$cutoff_min
+			),
+			'icon'             => 'shopping-cart',
+			'is_pro'           => true,
+			'requires_plugin'  => 'woocommerce',
+			'requires_modules' => array( 'email-marketing' ),
+			'workflow'         => array(
+				'name'          => __( 'WooCommerce Advanced Smart Cart Recovery (3-Way)', 'ai-marketing-expert' ),
+				'description'   => sprintf(
+					/* translators: %d: minutes of inactivity */
+					__( 'Advanced 3-way abandoned cart recovery (triggers after %d minutes of inactivity) branching on duplicate quantities, multiple products, and single items.', 'ai-marketing-expert' ),
+					$cutoff_min
+				),
+				'trigger_type'  => 'event',
+				'trigger_event' => 'woo_cart_abandoned',
+			),
+			'steps'            => array(
+				array(
+					'key'         => 'check_duplicate_qty',
+					'parent_key'  => '',
+					'branch'      => 'default',
+					'action_type' => 'condition',
+					'config'      => array(
+						'check' => 'event_field_equals',
+						'field' => 'cart_type',
+						'value' => 'duplicate_qty',
+					),
+				),
+				array(
+					'key'         => 'duplicate_qty_recovery_email',
+					'parent_key'  => 'check_duplicate_qty',
+					'branch'      => 'yes',
+					'action_type' => 'send_email',
+					'config'      => array(
+						'to'      => '{event.email}',
+						'subject' => __( '🛒 Quick question, {event.customer_name}: Did you mean to add {event.product_names} more than once?', 'ai-marketing-expert' ),
+						'body'    => __( "Hi {event.customer_name},\n\nWe noticed you were checking out {event.product_names}, but left before completing your purchase.\n\nWhen reviewing your cart, we saw that multiple quantities were added (Cart Total: {event.cart_total} {event.currency}).\n\nIt happens all the time on mobile screens and fast clicks! If you only wanted to purchase a SINGLE item, you don't need to manually edit or adjust your cart — we've prepared an instant 1-click checkout for you:\n\n<div style=\"margin: 18px 0;\">\n  <a href=\"{event.single_qty_url}\" style=\"display:inline-block;background-color:#2563eb;color:#ffffff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;text-align:center;\">👉 Buy Just 1 Item (1-Click Fast Checkout)</a>\n</div>\n\nPrefer to get all of them and keep the full order? No problem:\n\n<div style=\"margin: 14px 0;\">\n  <a href=\"{event.recovery_url}\" style=\"display:inline-block;background-color:#0f172a;color:#ffffff;padding:10px 22px;text-decoration:none;border-radius:6px;font-weight:600;font-size:14px;text-align:center;\">👉 Restore Entire Cart &amp; Complete Order</a>\n</div>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🌟 Shop With Confidence:\n✓ 100% Secure & Encrypted Payment\n✓ Fast Dispatch & Reliable Tracking\n✓ Easy Returns & Dedicated Support\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nIf you had any questions or need a hand completing your order, simply reply to this email and our team will gladly assist you!\n\nWarm regards,\n{workflow_name}", 'ai-marketing-expert' ),
+					),
+				),
+				array(
+					'key'         => 'check_multiple_items',
+					'parent_key'  => 'check_duplicate_qty',
+					'branch'      => 'no',
+					'action_type' => 'condition',
+					'config'      => array(
+						'check' => 'event_field_equals',
+						'field' => 'cart_type',
+						'value' => 'multiple_items',
+					),
+				),
+				array(
+					'key'         => 'multiple_items_recovery_email',
+					'parent_key'  => 'check_multiple_items',
+					'branch'      => 'yes',
+					'action_type' => 'send_email',
+					'config'      => array(
+						'to'      => '{event.email}',
+						'subject' => __( 'Can\'t decide on everything, {event.customer_name}? Buy just your favorite in 1-click! 🛍️✨', 'ai-marketing-expert' ),
+						'body'    => __( "Hi {event.customer_name},\n\nYou have fantastic taste! We noticed you left some amazing items in your shopping bag:\n\n📦 Your Selected Items:\n{event.product_names}\n(Total Cart Value: {event.cart_total} {event.currency})\n\nWe know how hard it can be to decide when you love multiple products, or perhaps the full basket total was a little higher than you planned for today.\n\nGood news: you don't have to buy everything! If you prefer to grab just ONE of your favorite products right now, you can check out directly in 1 click below:\n\n👇 Buy Any Single Item Directly:\n{event.single_item_links}\n\nOr if you decided you want the complete bundle after all:\n\n<div style=\"margin: 18px 0;\">\n  <a href=\"{event.recovery_url}\" style=\"display:inline-block;background-color:#0f172a;color:#ffffff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;text-align:center;\">👉 Restore Entire Cart &amp; Complete Order &raquo;</a>\n</div>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n⚡ Good to know:\n• Your items are temporarily reserved in your cart.\n• Popular products sell out quickly once reservations expire.\n• 100% Safe & Encrypted Checkout with Easy Returns.\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nQuestions or need advice? Just hit reply to this email — we're always here for you!\n\nWarm regards,\n{workflow_name}", 'ai-marketing-expert' ),
+					),
+				),
+				array(
+					'key'         => 'single_item_recovery_email',
+					'parent_key'  => 'check_multiple_items',
+					'branch'      => 'no',
+					'action_type' => 'send_email',
+					'config'      => array(
+						'to'      => '{event.email}',
+						'subject' => __( 'Good news, {event.customer_name}: We saved your {event.product_names}! Complete your order in 1 click ⚡', 'ai-marketing-expert' ),
+						'body'    => __( "Hi {event.customer_name},\n\nWe noticed you were checking out {event.product_names} (Total: {event.cart_total} {event.currency}), but didn't quite get across the finish line.\n\nLife gets busy and distractions happen — so we held your cart and reserved your item so nobody else snaps it up!\n\nYour item is packed and ready to ship as soon as you're ready. Click below to jump straight to checkout and complete your order in seconds:\n\n<div style=\"margin: 18px 0;\">\n  <a href=\"{event.recovery_url}\" style=\"display:inline-block;background-color:#2563eb;color:#ffffff;padding:12px 26px;text-decoration:none;border-radius:6px;font-weight:600;font-size:15px;text-align:center;\">👉 Complete My Order in 1 Click &raquo;</a>\n</div>\n\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n🌟 Shop With Confidence:\n✓ Safe, Encrypted & Seamless Checkout\n✓ Fast Dispatch Directly to Your Door\n✓ 100% Customer Satisfaction Guarantee\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\nHave a question about sizing, features, or shipping? Simply reply to this email and our team will be delighted to assist you!\n\nWarmest regards,\n{workflow_name}", 'ai-marketing-expert' ),
+					),
+				),
+				array(
+					'key'         => 'notify_admin_dup',
+					'parent_key'  => 'duplicate_qty_recovery_email',
+					'branch'      => 'default',
+					'action_type' => 'send_notification',
+					'config'      => array(
+						'subject' => __( 'Abandoned Cart Alert (Duplicate Qty): {event.customer_name}', 'ai-marketing-expert' ),
+						'body'    => __( "A customer abandoned their cart with duplicate quantities.\n\nCustomer: {event.customer_name}\nEmail: {event.email}\nTotal: {event.cart_total} {event.currency}\nItems: {event.product_names}\n\nA single-quantity 1-click recovery email was automatically sent.", 'ai-marketing-expert' ),
+					),
+				),
+				array(
+					'key'         => 'notify_admin_multi',
+					'parent_key'  => 'multiple_items_recovery_email',
+					'branch'      => 'default',
+					'action_type' => 'send_notification',
+					'config'      => array(
+						'subject' => __( 'Abandoned Cart Alert (Multiple Items): {event.customer_name}', 'ai-marketing-expert' ),
+						'body'    => __( "A customer abandoned their cart with multiple products.\n\nCustomer: {event.customer_name}\nEmail: {event.email}\nTotal: {event.cart_total} {event.currency}\nItems: {event.product_names}\n\nA recovery email with individual 1-click product links was automatically sent.", 'ai-marketing-expert' ),
+					),
+				),
+				array(
+					'key'         => 'notify_admin_single',
+					'parent_key'  => 'single_item_recovery_email',
+					'branch'      => 'default',
+					'action_type' => 'send_notification',
+					'config'      => array(
+						'subject' => __( 'Abandoned Cart Alert (Single Item): {event.customer_name}', 'ai-marketing-expert' ),
+						'body'    => __( "A customer abandoned their cart with a single item.\n\nCustomer: {event.customer_name}\nEmail: {event.email}\nTotal: {event.cart_total} {event.currency}\nItems: {event.product_names}\n\nA direct recovery email was automatically sent.", 'ai-marketing-expert' ),
+					),
+				),
+			),
+		);
+
+		$templates['inbound_webhook_lead'] = array(
+			'name'             => __( 'Inbound Webhook Lead Processor', 'ai-marketing-expert' ),
+			'description'      => __( 'Receives leads from external forms or webhooks, enrolls them into an email funnel, and notifies your team.', 'ai-marketing-expert' ),
+			'icon'             => 'zap',
+			'is_pro'           => false,
+			'requires_modules' => array( 'email-marketing' ),
+			'workflow'         => array(
+				'name'          => __( 'Inbound Webhook Lead Processor', 'ai-marketing-expert' ),
+				'description'   => __( 'Ingest webhook leads, enroll into email funnel, and notify team.', 'ai-marketing-expert' ),
+				'trigger_type'  => 'event',
+				'trigger_event' => 'inbound_webhook',
+				'trigger_config' => array(
+					'webhook_token' => 'lead-' . wp_generate_password( 8, false ),
+				),
+			),
+			'steps'            => array(
+				array(
+					'key'         => 'enroll',
+					'parent_key'  => '',
+					'branch'      => 'default',
+					'action_type' => 'enroll_in_funnel',
+					'config'      => array(
+						'subscriber_email'   => '{event.email}',
+						'create_if_missing'  => true,
+					),
+				),
+				array(
+					'key'         => 'notify',
+					'parent_key'  => 'enroll',
+					'branch'      => 'default',
+					'action_type' => 'send_notification',
+					'config'      => array(
+						'subject' => __( 'New Webhook Lead: {event.name} ({event.email})', 'ai-marketing-expert' ),
+						'body'    => __( "A new lead was received via Inbound Webhook.\n\nName: {event.name}\nEmail: {event.email}\nWebhook Token: {event.token}\n\nThey were enrolled into the email funnel automatically.", 'ai-marketing-expert' ),
+					),
+				),
+			),
+		);
+
+		$templates['cf7_lead_auto_responder'] = array(
+			'name'             => __( 'Contact Form 7 Auto-Responder & Alert', 'ai-marketing-expert' ),
+			'description'      => __( 'When someone submits a Contact Form 7 form, sends an instant greeting email to the submitter and alerts your team.', 'ai-marketing-expert' ),
+			'icon'             => 'mail',
+			'is_pro'           => false,
+			'requires_plugin'  => 'contact-form-7',
+			'workflow'         => array(
+				'name'          => __( 'Contact Form 7 Lead Auto-Responder', 'ai-marketing-expert' ),
+				'description'   => __( 'Instant confirmation email to form submitters and internal alert.', 'ai-marketing-expert' ),
+				'trigger_type'  => 'event',
+				'trigger_event' => 'cf7_submission',
+				'trigger_config' => array(
+					'form_id' => 0,
+				),
+			),
+			'steps'            => array(
+				array(
+					'key'         => 'greeting_email',
+					'parent_key'  => '',
+					'branch'      => 'default',
+					'action_type' => 'send_email',
+					'config'      => array(
+						'to'      => '{event.email}',
+						'subject' => __( 'Thank you for reaching out, {event.name}!', 'ai-marketing-expert' ),
+						'body'    => __( "Hi {event.name},\n\nThank you for contacting us! We received your message regarding \"{event.subject}\":\n\n\"{event.message}\"\n\nOur team is reviewing your inquiry and will get back to you shortly.\n\nBest regards,\n{workflow_name}", 'ai-marketing-expert' ),
+					),
+				),
+				array(
+					'key'         => 'notify_team',
+					'parent_key'  => 'greeting_email',
+					'branch'      => 'default',
+					'action_type' => 'send_notification',
+					'config'      => array(
+						'subject' => __( 'New Contact Form Lead: {event.name} ({event.email})', 'ai-marketing-expert' ),
+						'body'    => __( "A new contact form was submitted.\n\nName: {event.name}\nEmail: {event.email}\nSubject: {event.subject}\nForm: {event.form_title}\n\nMessage:\n{event.message}\n\nA confirmation email has already been sent to the visitor.", 'ai-marketing-expert' ),
+					),
+				),
+			),
+		);
+
 		$templates['daily_smart_content'] = array(
 			'name'             => __( 'Daily Smart Content', 'ai-marketing-expert' ),
 			'description'      => __( 'Lightweight daily pair: the Brain rotates a fresh topic, writes a short blog draft, and schedules a matching social post about it.', 'ai-marketing-expert' ),
@@ -443,6 +758,44 @@ class BuiltinTemplates {
 					'subject' => __( '3-email mini-course ready: {event.post_title}', 'ai-marketing-expert' ),
 					'body'    => __( "Your blog post has been transformed into a 3-email mini-course.\n\n📝 Source: {event.post_title}\n🔗 {event.post_url}\n\n━━━ EMAIL 1: Introduction ━━━\n{email1.content}\n\n━━━ EMAIL 2: Deep-Dive ━━━\n{email2.content}\n\n━━━ EMAIL 3: Action Plan ━━━\n{email3.content}\n\n💡 Use these in your nurture sequence or as a lead magnet.", 'ai-marketing-expert' ),
 				) ),
+			),
+		);
+
+		$templates['woo_post_purchase_review'] = array(
+			'name'             => __( 'Post-Purchase Review Request', 'ai-marketing-expert' ),
+			'description'      => __( 'When a WooCommerce order is completed, automatically wait 1 hour and send a personalized thank you email requesting a product review.', 'ai-marketing-expert' ),
+			'icon'             => 'star',
+			'is_pro'           => true,
+			'requires_plugin'  => 'woocommerce',
+			'requires_modules' => array( 'email-marketing' ),
+			'workflow'         => array(
+				'name'          => __( 'Post-Purchase Review Request', 'ai-marketing-expert' ),
+				'description'   => __( 'Follow up on completed WooCommerce orders to gather product reviews.', 'ai-marketing-expert' ),
+				'trigger_type'  => 'event',
+				'trigger_event' => 'woo_order_completed',
+			),
+			'steps'            => array(
+				array(
+					'key'         => 'wait_delay',
+					'parent_key'  => '',
+					'branch'      => 'default',
+					'action_type' => 'delay',
+					'config'      => array(
+						'delay_value' => 1,
+						'delay_unit'  => 'hours',
+					),
+				),
+				array(
+					'key'         => 'review_email',
+					'parent_key'  => 'wait_delay',
+					'branch'      => 'default',
+					'action_type' => 'send_email',
+					'config'      => array(
+						'to'      => '{event.email}',
+						'subject' => __( 'How was your recent order #{event.order_id}, {event.name}?', 'ai-marketing-expert' ),
+						'body'    => __( "Hi {event.name},\n\nThank you for shopping with us! Your order #{event.order_id} ({event.product_names}) has been completed.\n\nWe hope you love your purchase. Could you take 30 seconds to share your thoughts and review your products?\n\nYour feedback helps other shoppers and allows us to keep improving our service.\n\nThank you for being our valued customer!\n\nWarm regards,\n{workflow_name}", 'ai-marketing-expert' ),
+					),
+				),
 			),
 		);
 

@@ -65,6 +65,18 @@ class WorkflowRestController {
 			'permission_callback' => $perm,
 		) );
 
+		register_rest_route( $this->ns, $base . '/ai-generate', array(
+			'methods'             => 'POST',
+			'callback'            => array( $this, 'ai_generate' ),
+			'permission_callback' => $perm,
+		) );
+
+		register_rest_route( $this->ns, $base . '/webhook/(?P<token>[a-zA-Z0-9_-]+)', array(
+			'methods'             => 'POST',
+			'callback'            => array( $this, 'receive_webhook' ),
+			'permission_callback' => '__return_true',
+		) );
+
 		register_rest_route( $this->ns, $base . '/workflows', array(
 			array(
 				'methods'             => 'GET',
@@ -249,6 +261,51 @@ class WorkflowRestController {
 		return new \WP_REST_Response( array( 'triggers' => TriggerRegistry::for_api() ), 200 );
 	}
 
+	/**
+	 * Text-to-Workflow AI Generation endpoint callback.
+	 *
+	 * @param \WP_REST_Request $req REST Request.
+	 * @return \WP_REST_Response
+	 */
+	public function ai_generate( \WP_REST_Request $req ): \WP_REST_Response {
+		$prompt         = sanitize_textarea_field( (string) $req->get_param( 'prompt' ) );
+		$brand_voice_id = absint( $req->get_param( 'brand_voice_id' ) );
+
+		if ( empty( $prompt ) ) {
+			return new \WP_REST_Response( array( 'message' => __( 'Prompt is required.', 'ai-marketing-expert' ) ), 400 );
+		}
+
+		require_once AIME_PLUGIN_DIR . 'modules/workflow-automation/services/class-ai-workflow-generator.php';
+		$result = \WPSpace\AiMarketingExpert\Modules\WorkflowAutomation\Services\AiWorkflowGenerator::generate( $prompt, $brand_voice_id );
+
+		if ( is_wp_error( $result ) ) {
+			return new \WP_REST_Response( array( 'message' => $result->get_error_message() ), 400 );
+		}
+
+		return new \WP_REST_Response( array( 'workflow' => $result ), 200 );
+	}
+
+	/**
+	 * Public inbound webhook receiver endpoint callback.
+	 *
+	 * @param \WP_REST_Request $req REST Request.
+	 * @return \WP_REST_Response
+	 */
+	public function receive_webhook( \WP_REST_Request $req ): \WP_REST_Response {
+		$token = sanitize_text_field( (string) $req->get_param( 'token' ) );
+		if ( empty( $token ) ) {
+			return new \WP_REST_Response( array( 'message' => 'Token required' ), 400 );
+		}
+
+		$params = $req->get_params();
+		unset( $params['token'] );
+
+		// Fire universal webhook hook.
+		do_action( 'aime_inbound_webhook_received', $token, $params );
+
+		return new \WP_REST_Response( array( 'received' => true ), 200 );
+	}
+
 	public function get_templates(): \WP_REST_Response {
 		return new \WP_REST_Response( array( 'templates' => TemplateRegistry::for_api() ), 200 );
 	}
@@ -263,13 +320,10 @@ class WorkflowRestController {
 			return new \WP_REST_Response( array( 'message' => __( 'This template requires a Pro plan.', 'ai-marketing-expert' ) ), 403 );
 		}
 
-		foreach ( (array) ( $template['requires_modules'] ?? array() ) as $mod ) {
-			if ( ! aime()->modules()->is_active( $mod ) ) {
-				return new \WP_REST_Response( array(
-					/* translators: %s: module id. */
-					'message' => sprintf( __( 'This template requires the "%s" module to be active.', 'ai-marketing-expert' ), $mod ),
-				), 400 );
-			}
+		if ( ! TemplateRegistry::is_available( $template ) ) {
+			return new \WP_REST_Response( array(
+				'message' => __( 'This template requires plugins or modules that are not currently active on this site.', 'ai-marketing-expert' ),
+			), 400 );
 		}
 
 		$data               = $this->sanitize_workflow( (array) ( $template['workflow'] ?? array() ) );
@@ -340,6 +394,15 @@ class WorkflowRestController {
 
 		// Activating a workflow requires every step's required config to be set.
 		if ( 'active' === $status ) {
+			$trigger_error = $this->validate_trigger_availability(
+				$status,
+				sanitize_text_field( (string) ( $params['trigger_type'] ?? 'schedule' ) ),
+				sanitize_key( (string) ( $params['trigger_event'] ?? '' ) )
+			);
+			if ( $trigger_error ) {
+				return $trigger_error;
+			}
+
 			$config_error = $this->validate_required_configs( (array) ( $params['steps'] ?? array() ) );
 			if ( $config_error ) {
 				return $config_error;
@@ -391,6 +454,15 @@ class WorkflowRestController {
 		// The list-screen Activate toggle sends no steps, so fall back to the
 		// stored ones for validation.
 		if ( 'active' === $status ) {
+			$trigger_error = $this->validate_trigger_availability(
+				$status,
+				sanitize_text_field( (string) ( $params['trigger_type'] ?? $wf->trigger_type ) ),
+				sanitize_key( (string) ( $params['trigger_event'] ?? $wf->trigger_event ) )
+			);
+			if ( $trigger_error ) {
+				return $trigger_error;
+			}
+
 			$steps_to_check = isset( $params['steps'] ) && is_array( $params['steps'] )
 				? $params['steps']
 				: array_map(
@@ -828,6 +900,34 @@ class WorkflowRestController {
 	}
 
 	/**
+	 * Validate that an activating workflow's trigger has its required dependency active.
+	 *
+	 * @param string $status Workflow status ('active', 'draft', etc.).
+	 * @param string $trigger_type Trigger type ('schedule' or 'event').
+	 * @param string $trigger_event Trigger event key.
+	 * @return \WP_REST_Response|null
+	 */
+	private function validate_trigger_availability( string $status, string $trigger_type, string $trigger_event ): ?\WP_REST_Response {
+		if ( 'active' !== $status || 'event' !== $trigger_type || empty( $trigger_event ) ) {
+			return null;
+		}
+
+		if ( ! TriggerRegistry::is_available( $trigger_event ) ) {
+			$trig_def   = TriggerRegistry::get( $trigger_event );
+			$req_plugin = $trig_def['requires_label'] ?? $trig_def['requires_plugin'] ?? $trigger_event;
+			return new \WP_REST_Response( array(
+				'message' => sprintf(
+					/* translators: %s: required plugin name */
+					__( 'Cannot activate workflow: Trigger requires "%s" which is not installed or active on this site.', 'ai-marketing-expert' ),
+					$req_plugin
+				),
+			), 400 );
+		}
+
+		return null;
+	}
+
+	/**
 	 * Check every step's required config fields (per the action registry).
 	 * Returns an error response naming the first offending step, or null.
 	 *
@@ -909,6 +1009,7 @@ class WorkflowRestController {
 			'next_run_at'    => $w->next_run_at,
 			'last_run_at'    => $w->last_run_at,
 			'run_count'      => (int) $w->run_count,
+			'woo_cart_cutoff_minutes' => (int) ( ( get_option( 'aime_settings', array() )['woo_cart_cutoff_minutes'] ?? 0 ) ?: 30 ),
 		);
 	}
 

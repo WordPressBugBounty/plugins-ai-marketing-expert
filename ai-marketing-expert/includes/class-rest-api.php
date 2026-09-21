@@ -724,6 +724,7 @@ class RestApi {
 			'gdpr_enabled'     => true,
 			'delete_data_on_uninstall' => false,
 			'retention_days'   => 60,
+			'woo_cart_cutoff_minutes' => 30,
 		);
 		$settings = wp_parse_args( aime_get_db_option( 'aime_settings', array() ), $defaults );
 
@@ -799,6 +800,7 @@ class RestApi {
 			'delete_data_on_uninstall',
 			'unsubscribe_page',
 			'retention_days',
+			'woo_cart_cutoff_minutes',
 		);
 
 		foreach ( $allowed as $key ) {
@@ -1094,6 +1096,9 @@ class RestApi {
 
 			case 'retention_days':
 				return in_array( (int) $value, array( 0, 30, 60, 90, 180, 365 ), true ) ? (int) $value : 60;
+
+			case 'woo_cart_cutoff_minutes':
+				return max( 1, min( 1440, absint( $value ) ) );
 
 			case 'double_optin':
 			case 'track_opens':

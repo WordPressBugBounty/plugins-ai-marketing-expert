@@ -42,6 +42,11 @@ class OnPageSeoService {
 		// Calculate overall score.
 		$score = $this->calculate_score( $technical_results );
 
+		// Sync score to post meta and active SEO plugins (Rank Math, Yoast, canonical).
+		if ( $wp_post_id > 0 && class_exists( '\\WPSpace\\AiMarketingExpert\\Modules\\Seo\\Services\\SeoAdapterService' ) ) {
+			\WPSpace\AiMarketingExpert\Modules\Seo\Services\SeoAdapterService::set_seo_score( $wp_post_id, $score );
+		}
+
 		// Count issues.
 		$issues   = 0;
 		$warnings = 0;
@@ -114,6 +119,7 @@ class OnPageSeoService {
 			'data'           => array(
 				'id'              => $audit_id,
 				'overall_score'   => $score,
+				'keyword_focus'   => $keyword_focus,
 				'issues_count'    => $issues,
 				'warnings_count'  => $warnings,
 				'passed_count'    => $passed,
@@ -146,7 +152,7 @@ class OnPageSeoService {
 				'meta_description' => get_post_meta( $wp_post_id, '_yoast_wpseo_metadesc', true )
 				                      ?: get_post_meta( $wp_post_id, 'rank_math_description', true )
 				                      ?: $post->post_excerpt,
-				'word_count'       => str_word_count( wp_strip_all_tags( $post->post_content ) ),
+				'word_count'       => function_exists( 'aime_count_words' ) ? aime_count_words( (string) $post->post_content ) : str_word_count( wp_strip_all_tags( $post->post_content ) ),
 			);
 		}
 
@@ -217,6 +223,47 @@ class OnPageSeoService {
 					: __( 'Focus keyword not found in title.', 'ai-marketing-expert' ),
 			);
 
+			// Keyword near beginning of title (first 50%).
+			$pos = mb_stripos( $data['meta_title'], $keyword );
+			$in_first_50 = false !== $pos && ( $pos / max( 1, mb_strlen( $data['meta_title'] ) ) ) <= 0.5;
+			$results[] = array(
+				'check'   => 'keyword_near_beginning',
+				'label'   => __( 'Keyword near Beginning of Title', 'ai-marketing-expert' ),
+				'status'  => $in_first_50 ? 'pass' : 'info',
+				'message' => $in_first_50
+					? __( 'Focus keyword appears near the beginning of the title.', 'ai-marketing-expert' )
+					: __( 'Optional: Placing the focus keyword closer to the start of the title can improve CTR.', 'ai-marketing-expert' ),
+			);
+
+			// Power words in title (soft check).
+			$power_words = array( 'best', 'top', 'guide', 'ultimate', 'easy', 'fast', 'proven', 'review', 'complete', 'tips', 'secrets', 'simple', 'essential', 'strategy', 'powerful', 'checklist', 'step', 'how', 'free', 'new' );
+			$found_power = false;
+			foreach ( $power_words as $pw ) {
+				if ( preg_match( '/\b' . preg_quote( $pw, '/' ) . '\b/i', $title_lower ) ) {
+					$found_power = true;
+					break;
+				}
+			}
+			$results[] = array(
+				'check'   => 'title_power_words',
+				'label'   => __( 'Power Word in Title', 'ai-marketing-expert' ),
+				'status'  => $found_power ? 'pass' : 'info',
+				'message' => $found_power
+					? __( 'Title contains an engaging power word.', 'ai-marketing-expert' )
+					: __( 'Optional: An engaging power word (e.g. Best, Guide, Proven) can increase clicks.', 'ai-marketing-expert' ),
+			);
+
+			// Number in title (soft check).
+			$has_num = (bool) preg_match( '/\d+/', $data['meta_title'] );
+			$results[] = array(
+				'check'   => 'title_has_number',
+				'label'   => __( 'Number in Title', 'ai-marketing-expert' ),
+				'status'  => $has_num ? 'pass' : 'info',
+				'message' => $has_num
+					? __( 'Title contains a number (numbers can boost CTR).', 'ai-marketing-expert' )
+					: __( 'Optional: For listicles, guides, or updates, numbers can increase clicks.', 'ai-marketing-expert' ),
+			);
+
 			// Keyword in meta description.
 			$desc_lower = mb_strtolower( $data['meta_description'] );
 			$in_desc    = false !== strpos( $desc_lower, $kw_lower );
@@ -245,8 +292,9 @@ class OnPageSeoService {
 			// Keyword density.
 			if ( $wc > 0 ) {
 				$content_lower = mb_strtolower( wp_strip_all_tags( $data['content'] ) );
-				$kw_count      = substr_count( $content_lower, $kw_lower );
-				$density       = round( ( $kw_count / $wc ) * 100, 2 );
+				$kw_count      = mb_substr_count( $content_lower, $kw_lower );
+				$kw_words      = function_exists( 'aime_count_words' ) ? max( 1, aime_count_words( $keyword ) ) : max( 1, str_word_count( $keyword ) );
+				$density       = round( ( $kw_count * $kw_words / $wc ) * 100, 2 );
 				$results[]     = array(
 					'check'   => 'keyword_density',
 					'label'   => __( 'Keyword Density', 'ai-marketing-expert' ),
@@ -272,7 +320,7 @@ class OnPageSeoService {
 		}
 
 		// Heading check (H2/H3).
-		preg_match_all( '/<h[23][^>]*>/i', $data['content'], $headings );
+		preg_match_all( '/<h[23][^>]*>(.*?)<\/h[23]>/is', $data['content'], $headings );
 		$heading_count = count( $headings[0] );
 		$results[]     = array(
 			'check'   => 'heading_structure',
@@ -282,6 +330,25 @@ class OnPageSeoService {
 			'message' => sprintf( __( 'Found %d subheadings (H2/H3). Use 2+ for better structure.', 'ai-marketing-expert' ), $heading_count ),
 			'value'   => $heading_count,
 		);
+
+		// Keyword in subheadings (H2/H3).
+		if ( $keyword ) {
+			$kw_in_heading = false;
+			foreach ( $headings[1] ?? array() as $htext ) {
+				if ( false !== strpos( mb_strtolower( wp_strip_all_tags( $htext ) ), $kw_lower ) ) {
+					$kw_in_heading = true;
+					break;
+				}
+			}
+			$results[] = array(
+				'check'   => 'keyword_in_subheadings',
+				'label'   => __( 'Keyword in Subheadings', 'ai-marketing-expert' ),
+				'status'  => $kw_in_heading ? 'pass' : 'warning',
+				'message' => $kw_in_heading
+					? __( 'Focus keyword found in H2/H3 subheading.', 'ai-marketing-expert' )
+					: __( 'Focus keyword not found in any H2 or H3 subheadings.', 'ai-marketing-expert' ),
+			);
+		}
 
 		// Image alt text check.
 		preg_match_all( '/<img[^>]*>/i', $data['content'], $images );
@@ -303,6 +370,27 @@ class OnPageSeoService {
 			'value'   => array( 'total' => $img_count, 'missing_alt' => $missing_alt ),
 		);
 
+		// Keyword in image alt attribute.
+		if ( $keyword && $img_count > 0 ) {
+			$kw_in_alt = false;
+			foreach ( $images[0] as $img ) {
+				if ( preg_match( '/alt\s*=\s*"([^"]*)"/i', $img, $alt_match ) ) {
+					if ( false !== strpos( mb_strtolower( $alt_match[1] ), $kw_lower ) ) {
+						$kw_in_alt = true;
+						break;
+					}
+				}
+			}
+			$results[] = array(
+				'check'   => 'keyword_in_image_alt',
+				'label'   => __( 'Keyword in Image Alt', 'ai-marketing-expert' ),
+				'status'  => $kw_in_alt ? 'pass' : 'warning',
+				'message' => $kw_in_alt
+					? __( 'Focus keyword found in image alt text.', 'ai-marketing-expert' )
+					: __( 'Focus keyword not found in any image alt attributes.', 'ai-marketing-expert' ),
+			);
+		}
+
 		// Internal links check.
 		$site_url = home_url();
 		preg_match_all( '/<a\s[^>]*href\s*=\s*"([^"]*)"[^>]*>/i', $data['content'], $links );
@@ -322,6 +410,43 @@ class OnPageSeoService {
 			/* translators: 1: internal link count, 2: external link count */
 			'message' => sprintf( __( '%1$d internal links, %2$d external links found.', 'ai-marketing-expert' ), $internal, $external ),
 			'value'   => array( 'internal' => $internal, 'external' => $external ),
+		);
+
+		// Outbound external links check.
+		$dofollow_external = 0;
+		foreach ( $links[0] ?? array() as $a_tag ) {
+			if ( preg_match( '/href\s*=\s*"(https?:\/\/[^"]*)"/i', $a_tag, $href_match ) ) {
+				$url_target = $href_match[1];
+				if ( 0 !== strpos( $url_target, $site_url ) ) {
+					if ( ! preg_match( '/rel\s*=\s*"[^"]*nofollow[^"]*"/i', $a_tag ) ) {
+						$dofollow_external++;
+					}
+				}
+			}
+		}
+		$results[] = array(
+			'check'   => 'outbound_links',
+			'label'   => __( 'Outbound External Links', 'ai-marketing-expert' ),
+			'status'  => $external >= 1 ? 'pass' : 'warning',
+			'message' => $external >= 1
+				? sprintf( __( 'Found %1$d external links (%2$d dofollow). Good for authority.', 'ai-marketing-expert' ), $external, $dofollow_external )
+				: __( 'No external outbound links found. Linking to authoritative sources helps SEO.', 'ai-marketing-expert' ),
+			'value'   => array( 'external' => $external, 'dofollow' => $dofollow_external ),
+		);
+
+		// FAQ / GEO check.
+		$has_faq = (bool) (
+			preg_match( '/<h[23][^>]*>[^<]*(Frequently Asked Questions|FAQ)[^<]*<\/h[23]>/i', $data['content'] )
+			|| preg_match( '/class=["\'][^"\']*aime-faq/i', $data['content'] )
+			|| ( ! empty( $data['wp_post_id'] ) && get_post_meta( (int) $data['wp_post_id'], '_aime_faq_data', true ) )
+		);
+		$results[] = array(
+			'check'   => 'has_faq_section',
+			'label'   => __( 'FAQ & GEO Optimization', 'ai-marketing-expert' ),
+			'status'  => $has_faq ? 'pass' : 'info',
+			'message' => $has_faq
+				? __( 'FAQ section found (optimized for AI Search Engines & Rich Snippets).', 'ai-marketing-expert' )
+				: __( 'Optional: Adding an FAQ section helps ChatGPT, Perplexity, and Google cite your post.', 'ai-marketing-expert' ),
 		);
 
 		return $results;
@@ -386,21 +511,26 @@ class OnPageSeoService {
 			return 0;
 		}
 
-		$total   = count( $results );
-		$points  = 0;
+		$total  = 0;
+		$points = 0;
 		foreach ( $results as $r ) {
-			switch ( $r['status'] ?? 'fail' ) {
-				case 'pass':
-					$points += 1.0;
-					break;
-				case 'warning':
-					$points += 0.5;
-					break;
-				default:
-					break;
+			$status = $r['status'] ?? 'fail';
+			if ( 'info' === $status ) {
+				// Soft bonus suggestions do not penalize the score when not needed.
+				continue;
+			}
+			$total++;
+			if ( 'pass' === $status ) {
+				$points += 1.0;
+			} elseif ( 'warning' === $status ) {
+				$points += 0.55;
 			}
 		}
 
-		return (int) round( ( $points / $total ) * 100 );
+		if ( 0 === $total ) {
+			return 100;
+		}
+
+		return max( 0, min( 100, (int) round( ( $points / $total ) * 100 ) ) );
 	}
 }

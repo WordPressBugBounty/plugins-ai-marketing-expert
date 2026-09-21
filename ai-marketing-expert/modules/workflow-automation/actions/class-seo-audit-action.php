@@ -38,11 +38,15 @@ class SeoAuditAction extends BaseAction {
 		if ( '' === $keyword ) {
 			$parent_ref = $context['parent_output']['reference'] ?? array();
 
-			// 1. Try AI Brain selected topic
-			if ( ! empty( $parent_ref['selected_topic'] ) ) {
+			// 1. Try focus keyword from parent blog post action
+			if ( ! empty( $parent_ref['focus_keyword'] ) ) {
+				$keyword = sanitize_text_field( (string) $parent_ref['focus_keyword'] );
+			}
+			// 2. Try AI Brain selected topic
+			elseif ( ! empty( $parent_ref['selected_topic'] ) ) {
 				$keyword = sanitize_text_field( (string) $parent_ref['selected_topic'] );
 			}
-			// 2. Try AI Brain keywords list (first one)
+			// 3. Try AI Brain keywords list (first one)
 			elseif ( ! empty( $parent_ref['keywords'] ) ) {
 				$keywords_list = explode( ',', (string) $parent_ref['keywords'] );
 				$keyword       = sanitize_text_field( trim( $keywords_list[0] ?? '' ) );
@@ -107,12 +111,21 @@ class SeoAuditAction extends BaseAction {
 		// back to the top level for other/legacy shapes.
 		$data    = is_array( $result['data'] ?? null ) ? $result['data'] : array();
 		$score   = (int) ( $data['overall_score'] ?? $result['overall_score'] ?? $result['score'] ?? 0 );
+		$passed  = (int) ( $data['passed_count'] ?? 0 );
+		$warns   = (int) ( $data['warnings_count'] ?? 0 );
+
+		if ( $post_id > 0 && class_exists( '\\WPSpace\\AiMarketingExpert\\Modules\\Seo\\Services\\SeoAdapterService' ) ) {
+			\WPSpace\AiMarketingExpert\Modules\Seo\Services\SeoAdapterService::set_seo_score( $post_id, $score );
+		}
+
 		$preview = sprintf(
-			/* translators: 1: post id, 2: score, 3: keyword */
-			__( 'SEO audit complete for post #%1$d — score: %2$d/100 (keyword: %3$s).', 'ai-marketing-expert' ),
+			/* translators: 1: post id, 2: score, 3: keyword, 4: passed, 5: warnings */
+			__( 'SEO audit complete for post #%1$d — score: %2$d/100 (keyword: %3$s, %4$d passed, %5$d warnings).', 'ai-marketing-expert' ),
 			$post_id,
 			$score,
-			$keyword
+			$keyword,
+			$passed,
+			$warns
 		);
 
 		$reference = array(

@@ -83,8 +83,14 @@ abstract class BaseAction {
 	 */
 	protected static function topic( array $config, array $context, string $key = 'topic' ): string {
 		$topic = trim( (string) ( $config[ $key ] ?? '' ) );
+		if ( '{ai_brain.topic}' === $topic || '{topic}' === $topic || false !== stripos( $topic, 'ai_brain' ) ) {
+			$topic = '';
+		}
 		if ( '' === $topic ) {
 			$topic = trim( (string) ( $context['topic'] ?? '' ) );
+			if ( '{ai_brain.topic}' === $topic || '{topic}' === $topic || false !== stripos( $topic, 'ai_brain' ) ) {
+				$topic = '';
+			}
 		}
 		if ( '' === $topic ) {
 			$topic = self::resolve_from_context( $context, 'selected_topic', 'ai_brain' );

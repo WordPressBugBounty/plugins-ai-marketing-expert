@@ -771,15 +771,15 @@ function aime_strip_thinking_from_html( string $raw ): string {
 		return $raw;
 	}
 
-	// If the response starts with an HTML tag, it's already clean HTML.
+	// If the response starts with an HTML tag or placeholder tag, it's already clean HTML.
 	$first_char = $raw[0];
-	if ( '<' === $first_char ) {
+	if ( '<' === $first_char || '[' === $first_char ) {
 		return $raw;
 	}
 
-	// Otherwise, look for the first HTML opening tag. If found and the prefix
+	// Otherwise, look for the first HTML opening tag or placeholder. If found and the prefix
 	// looks like natural-language reasoning, drop the prefix.
-	$html_start = preg_match( '/<\s*(?:p|h[1-6]|div|section|article|ul|ol|li|blockquote|figure|table|nav|header|footer|main|aside|strong|em|br)\b/i', $raw, $m, PREG_OFFSET_CAPTURE );
+	$html_start = preg_match( '/(?:<\s*(?:p|h[1-6]|div|section|article|ul|ol|li|blockquote|figure|table|nav|header|footer|main|aside|strong|em|br|!--)\b|\[\[AIME_)/i', $raw, $m, PREG_OFFSET_CAPTURE );
 	if ( $html_start && isset( $m[0][1] ) && $m[0][1] > 0 ) {
 		$prefix = substr( $raw, 0, $m[0][1] );
 		// Only strip if the prefix contains natural-language reasoning
@@ -1153,3 +1153,26 @@ function aime_parse_ai_json( string $raw ): ?array {
 
 	return null;
 }
+
+/**
+ * UTF-8 and multibyte-aware word counter.
+ *
+ * str_word_count() in PHP only understands ASCII/Latin characters, returning 0
+ * for non-Latin languages (Bengali, Hindi, Arabic, Cyrillic, Greek, CJK, etc.).
+ * This helper calculates the accurate word count across all languages while
+ * preserving full compatibility with English/Latin text.
+ *
+ * @param string $text Source text (HTML will be stripped).
+ * @return int Word count.
+ */
+function aime_count_words( string $text ): int {
+	$text = trim( wp_strip_all_tags( $text ) );
+	if ( '' === $text ) {
+		return 0;
+	}
+	$ascii_count = str_word_count( $text );
+	$words = preg_split( '/[\s\p{Z}\p{P}]+/u', $text, -1, PREG_SPLIT_NO_EMPTY );
+	$unicode_count = is_array( $words ) ? count( $words ) : 0;
+
+	return max( $ascii_count, $unicode_count );
+}

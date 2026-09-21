@@ -290,6 +290,8 @@ class EmailRestController {
 				'company_size' => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
 				'keyword'      => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
 				'limit'        => array( 'type' => 'integer', 'default' => 10, 'sanitize_callback' => 'absint' ),
+				'page'         => array( 'type' => 'integer', 'default' => 1, 'sanitize_callback' => 'absint' ),
+				'per_page'     => array( 'type' => 'integer', 'default' => 10, 'sanitize_callback' => 'absint' ),
 			),
 		) );
 
@@ -335,6 +337,13 @@ class EmailRestController {
 		register_rest_route( $this->ns, '/email/leads/autopilot/run', array(
 			'methods'             => 'POST',
 			'callback'            => array( $c, 'run_autopilot' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+		) );
+
+		// POST /email/leads/autopilot/reset-pointer (admin)
+		register_rest_route( $this->ns, '/email/leads/autopilot/reset-pointer', array(
+			'methods'             => 'POST',
+			'callback'            => array( $c, 'reset_autopilot_pointer' ),
 			'permission_callback' => array( $this, 'admin_permission' ),
 		) );
 	}

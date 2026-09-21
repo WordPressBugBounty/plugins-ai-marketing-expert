@@ -48,8 +48,16 @@ class TemplateRegistry {
 		return $all[ $id ] ?? null;
 	}
 
-	/** True when every module the template depends on is active. */
+	/** True when every module and plugin the template depends on is active. */
 	public static function is_available( array $template ): bool {
+		if ( ! empty( $template['requires_plugin'] ) ) {
+			if ( 'woocommerce' === $template['requires_plugin'] && ! class_exists( 'WooCommerce' ) ) {
+				return false;
+			}
+			if ( 'contact-form-7' === $template['requires_plugin'] && ! ( class_exists( 'WPCF7_ContactForm' ) || defined( 'WPCF7_VERSION' ) ) ) {
+				return false;
+			}
+		}
 		foreach ( (array) ( $template['requires_modules'] ?? array() ) as $module_id ) {
 			if ( ! aime()->modules()->is_active( (string) $module_id ) ) {
 				return false;

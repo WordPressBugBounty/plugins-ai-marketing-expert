@@ -334,6 +334,14 @@ class FunnelProcessor {
 			home_url()
 		);
 
+		$view_in_browser_url = add_query_arg(
+			array(
+				'aime_track' => 'web_view',
+				'hash'       => $email_hash,
+			),
+			home_url()
+		);
+
 		// Merge tags (escape values for HTML context).
 		$replace = array(
 			'{{first_name}}'          => esc_html( $row->first_name ?? '' ),
@@ -346,6 +354,7 @@ class FunnelProcessor {
 			'{{unsubscribe_url}}'     => esc_url( $unsub_url ),
 			'{{company_name}}'        => esc_html( get_option( 'aime_company_name', get_bloginfo( 'name' ) ) ),
 			'{{company_address}}'     => esc_html( get_option( 'aime_company_address', '' ) ),
+			'{{view_in_browser_url}}' => esc_url( $view_in_browser_url ),
 		);
 		$subject = str_replace( array_keys( $replace ), array_values( $replace ), $subject );
 		$body    = str_replace( array_keys( $replace ), array_values( $replace ), $body );

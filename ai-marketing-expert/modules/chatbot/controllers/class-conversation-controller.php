@@ -571,4 +571,92 @@ class ConversationController {
 				: __( 'Conversation is now hidden.', 'ai-marketing-expert' ),
 		) );
 	}
+
+	/**
+	 * Sync captured chatbot leads to Email Marketing subscribers.
+	 */
+	public function sync_leads_to_subscribers( \WP_REST_Request $request ): \WP_REST_Response {
+		global $wpdb;
+		$conv_table = $wpdb->prefix . 'aime_chatbot_conversations';
+		$subs_table = $wpdb->prefix . 'aime_subscribers';
+
+		// Verify that email subscribers table exists
+		if ( $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', $subs_table ) ) !== $subs_table ) {
+			return new \WP_REST_Response( array(
+				'success' => false,
+				'message' => __( 'Email Marketing module is not yet initialized or table missing.', 'ai-marketing-expert' ),
+			), 400 );
+		}
+
+		$leads = $wpdb->get_results(
+			"SELECT DISTINCT visitor_name, visitor_email, started_at
+			   FROM {$conv_table}
+			  WHERE (lead_captured = 1 OR (visitor_email IS NOT NULL AND visitor_email != ''))
+			    AND visitor_email != ''"
+		);
+
+		if ( empty( $leads ) ) {
+			return new \WP_REST_Response( array(
+				'success' => true,
+				'synced'  => 0,
+				'message' => __( 'No chatbot leads found to sync.', 'ai-marketing-expert' ),
+			), 200 );
+		}
+
+		$synced = 0;
+		$now    = current_time( 'mysql' );
+
+		foreach ( $leads as $lead ) {
+			$email = sanitize_email( $lead->visitor_email );
+			if ( ! is_email( $email ) ) {
+				continue;
+			}
+
+			$exists = (int) $wpdb->get_var( $wpdb->prepare(
+				"SELECT id FROM {$subs_table} WHERE email = %s LIMIT 1",
+				$email
+			) );
+
+			if ( ! $exists ) {
+				$name_parts = explode( ' ', trim( (string) $lead->visitor_name ), 2 );
+				$first_name = sanitize_text_field( $name_parts[0] ?? '' );
+				$last_name  = sanitize_text_field( $name_parts[1] ?? '' );
+
+				$wpdb->insert(
+					$subs_table,
+					array(
+						'hash'         => md5( $email . time() ),
+						'first_name'   => $first_name,
+						'last_name'    => $last_name,
+						'email'        => $email,
+						'status'       => 'subscribed',
+						'contact_type' => 'lead',
+						'source'       => 'chatbot',
+						'created_at'   => $lead->started_at ?: $now,
+						'updated_at'   => $now,
+					)
+				);
+				$new_id = (int) $wpdb->insert_id;
+				if ( $new_id > 0 ) {
+					$synced++;
+					do_action( 'aime_subscriber_created', $new_id, array(
+						'email'      => $email,
+						'first_name' => $first_name,
+						'source'     => 'chatbot',
+					) );
+				}
+			}
+		}
+
+		return new \WP_REST_Response( array(
+			'success' => true,
+			'synced'  => $synced,
+			'total'   => count( $leads ),
+			'message' => sprintf(
+				/* translators: %d: count of synced subscribers */
+				__( 'Successfully synced %d leads to Email Marketing subscribers.', 'ai-marketing-expert' ),
+				$synced
+			),
+		), 200 );
+	}
 }

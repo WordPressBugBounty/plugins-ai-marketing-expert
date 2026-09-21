@@ -117,6 +117,15 @@ class PublisherService {
 		}
 
 		$clean_content = GenerateController::clean_ai_body( (string) $article->content, (string) ( $article->title ?? '' ) );
+
+		// Contextual internal linking engine (if enabled in settings).
+		$cg_settings         = get_option( 'aime_content-generator_settings', array() );
+		$auto_internal_links = isset( $cg_settings['auto_internal_links'] ) ? (bool) $cg_settings['auto_internal_links'] : true;
+		if ( $auto_internal_links && class_exists( '\\WPSpace\\AiMarketingExpert\\Modules\\ContentGenerator\\Services\\InternalLinkService' ) ) {
+			$internal_linker = new InternalLinkService();
+			$clean_content   = $internal_linker->inject_internal_links( $clean_content, (int) ( $article->wp_post_id ?? 0 ), 3 );
+		}
+
 		if ( $clean_content && $clean_content !== $article->content ) {
 			$wpdb->update(
 				$table,
@@ -128,9 +137,12 @@ class PublisherService {
 			$article->content = $clean_content;
 		}
 
+		$clean_content = aime_kses_article( (string) ( $article->content ?? '' ) );
+		$block_content = self::convert_to_gutenberg_blocks( $clean_content );
+
 		$post_data = array(
 			'post_title'   => sanitize_text_field( $article->title ),
-			'post_content' => aime_kses_article( $article->content ),
+			'post_content' => $block_content,
 			'post_excerpt' => sanitize_text_field( $article->excerpt ?? '' ),
 			'post_status'  => $post_status,
 			'post_type'    => $post_type,
@@ -177,18 +189,29 @@ class PublisherService {
 			}
 		}
 
+		// Extract focus keyword for image alt and SEO metadata.
+		$focus_keyword = '';
+		$kw_raw = json_decode( $article->keywords ?? '[]', true );
+		if ( is_array( $kw_raw ) && ! empty( $kw_raw[0] ) ) {
+			$focus_keyword = sanitize_text_field( (string) $kw_raw[0] );
+		}
+		$image_alt = ! empty( $focus_keyword ) ? $focus_keyword : $article->title;
+
 		// Featured image.
 		if ( ! has_post_thumbnail( $wp_post_id ) ) {
 			if ( ! empty( $article->featured_image_id ) ) {
-				// Attachment already exists in media library — use it directly.
+				// Attachment already exists in media library — use it directly and set alt.
 				set_post_thumbnail( $wp_post_id, (int) $article->featured_image_id );
+				if ( ! empty( $image_alt ) ) {
+					update_post_meta( (int) $article->featured_image_id, '_wp_attachment_image_alt', sanitize_text_field( $image_alt ) );
+				}
 			} elseif ( ! empty( $article->featured_image_url ) ) {
-				$this->set_featured_image( $wp_post_id, $article->featured_image_url, $article->title );
+				$this->set_featured_image( $wp_post_id, $article->featured_image_url, $image_alt );
 			}
 		}
 
 		// Meta title / description (Yoast / Rank Math / All-in-One SEO support).
-		$this->set_seo_meta( $wp_post_id, $article );
+		$this->set_seo_meta( $wp_post_id, $article, $focus_keyword );
 
 		// Update article row.
 		$article_status = 'future' === $post_status ? 'scheduled' : 'published';
@@ -279,50 +302,208 @@ class PublisherService {
 		}
 	}
 
-	private function set_seo_meta( int $wp_post_id, object $article ): void {
+	private function set_seo_meta( int $wp_post_id, object $article, string $focus = '' ): void {
 		$meta_title = sanitize_text_field( $article->meta_title ?? '' );
-		$meta_desc  = sanitize_textarea_field( $article->meta_description ?? '' );
-
-		// Focus keyword: first article keyword (Brain puts focus first).
-		$focus = '';
-		$kw_raw = json_decode( $article->keywords ?? '[]', true );
-		if ( is_array( $kw_raw ) && ! empty( $kw_raw[0] ) ) {
-			$focus = sanitize_text_field( (string) $kw_raw[0] );
+		if ( '' === $meta_title && ! empty( $article->title ) ) {
+			$meta_title = sanitize_text_field( $article->title );
 		}
 
-		if ( ! $meta_title && ! $meta_desc && '' === $focus ) {
-			return;
+		$meta_desc = sanitize_textarea_field( $article->meta_description ?? '' );
+		if ( '' === $meta_desc && ! empty( $article->excerpt ) ) {
+			$meta_desc = sanitize_textarea_field( $article->excerpt );
 		}
 
-		// Canonical store + multi-plugin sync (Yoast, RankMath, AIOSEO,
-		// SEOPress, Slim SEO, TSF) + aime_seo_sync hook for the long tail.
-		if ( class_exists( '\\WPSpace\\AiMarketingExpert\\Modules\\Seo\\Services\\SeoAdapterService' ) ) {
-			\WPSpace\AiMarketingExpert\Modules\Seo\Services\SeoAdapterService::sync( $wp_post_id, $focus, $meta_title, $meta_desc );
-			return;
+		if ( '' === $focus ) {
+			$kw_raw = json_decode( $article->keywords ?? '[]', true );
+			if ( is_array( $kw_raw ) && ! empty( $kw_raw[0] ) ) {
+				$focus = sanitize_text_field( (string) $kw_raw[0] );
+			}
 		}
 
-		// Fallback when SEO module inactive: legacy direct keys only.
-		if ( $meta_title ) {
+		// Extract FAQ items from body if present to store structured FAQ data for GEO / Schema.
+		$this->extract_and_save_faq_schema( $wp_post_id, (string) ( $article->content ?? '' ) );
+
+		$initial_score = (int) ( $article->seo_score ?? 0 );
+
+		// Direct unconditional writes for major SEO plugins (Yoast, Rank Math, AIOSEO)
+		// and canonical AIME keys so they exist whether SEO plugins are currently active or installed later.
+		if ( '' !== $meta_title ) {
 			update_post_meta( $wp_post_id, '_yoast_wpseo_title', $meta_title );
-		}
-		if ( $meta_desc ) {
-			update_post_meta( $wp_post_id, '_yoast_wpseo_metadesc', $meta_desc );
-		}
-		if ( $meta_title ) {
 			update_post_meta( $wp_post_id, 'rank_math_title', $meta_title );
-		}
-		if ( $meta_desc ) {
-			update_post_meta( $wp_post_id, 'rank_math_description', $meta_desc );
-		}
-		if ( $meta_title ) {
 			update_post_meta( $wp_post_id, '_aioseo_title', $meta_title );
+			update_post_meta( $wp_post_id, '_aime_seo_meta_title', $meta_title );
 		}
-		if ( $meta_desc ) {
+		if ( '' !== $meta_desc ) {
+			update_post_meta( $wp_post_id, '_yoast_wpseo_metadesc', $meta_desc );
+			update_post_meta( $wp_post_id, 'rank_math_description', $meta_desc );
 			update_post_meta( $wp_post_id, '_aioseo_description', $meta_desc );
+			update_post_meta( $wp_post_id, '_aime_seo_meta_description', $meta_desc );
 		}
 		if ( '' !== $focus ) {
+			update_post_meta( $wp_post_id, '_yoast_wpseo_focuskw', $focus );
+			update_post_meta( $wp_post_id, 'rank_math_focus_keyword', $focus );
+			update_post_meta( $wp_post_id, '_aioseo_keywords', $focus );
 			update_post_meta( $wp_post_id, 'aime_seo_keyword', $focus );
 		}
+		if ( $initial_score > 0 ) {
+			update_post_meta( $wp_post_id, 'rank_math_seo_score', $initial_score );
+			update_post_meta( $wp_post_id, 'aime_seo_score', $initial_score );
+		}
+
+		// Also invoke multi-plugin sync for SEOPress, Slim SEO, TSF, and third-party hooks.
+		if ( class_exists( '\\WPSpace\\AiMarketingExpert\\Modules\\Seo\\Services\\SeoAdapterService' ) ) {
+			\WPSpace\AiMarketingExpert\Modules\Seo\Services\SeoAdapterService::sync( $wp_post_id, $focus, $meta_title, $meta_desc, $initial_score );
+		}
+	}
+
+	/**
+	 * Extract FAQ items from body and save structured FAQ data into postmeta for Schema / GEO.
+	 */
+	private function extract_and_save_faq_schema( int $wp_post_id, string $content ): void {
+		if ( $wp_post_id <= 0 || '' === $content ) {
+			return;
+		}
+
+		$faqs = array();
+
+		// Priority 1: Match native details/summary Accordion blocks (capturing full body between </summary> and </details>).
+		if ( preg_match_all( '/<details[^>]*>\s*<summary[^>]*>(.*?)<\/summary>(.*?)<\/details>/is', $content, $qas, PREG_SET_ORDER ) ) {
+			foreach ( $qas as $qa ) {
+				$q = trim( wp_strip_all_tags( $qa[1] ) );
+				$a = trim( wp_strip_all_tags( $qa[2] ) );
+				if ( '' !== $q && '' !== $a ) {
+					$faqs[] = array( 'question' => $q, 'answer' => $a );
+				}
+			}
+		}
+
+		// Priority 2: Match explicitly classed FAQ items (aime-faq-q and aime-faq-a)
+		if ( empty( $faqs ) && preg_match_all( '/<h[34][^>]*class=["\'][^"\']*aime-faq-q[^"\']*["\'][^>]*>(.*?)<\/h[34]>\s*(?:<div[^>]*class=["\'][^"\']*aime-faq-a[^"\']*["\'][^>]*>)?\s*(?:<p[^>]*>)?(.*?)(?:<\/p>|<\/div>|<h[234]|$)/is', $content, $matches, PREG_SET_ORDER ) ) {
+			foreach ( $matches as $m ) {
+				$q = trim( wp_strip_all_tags( $m[1] ) );
+				$a = trim( wp_strip_all_tags( $m[2] ) );
+				if ( '' !== $q && '' !== $a ) {
+					$faqs[] = array( 'question' => $q, 'answer' => $a );
+				}
+			}
+		}
+
+		// Fallback 3: search for section under Frequently Asked Questions / FAQ
+		if ( empty( $faqs ) && preg_match( '/<h[23][^>]*>[^<]*(Frequently Asked Questions|FAQ)[^<]*<\/h[23]>(.*?)(?=<h2|$)/is', $content, $sec ) ) {
+			if ( preg_match_all( '/<h[34][^>]*>(.*?)<\/h[34]>\s*<p[^>]*>(.*?)<\/p>/is', $sec[2], $qas, PREG_SET_ORDER ) ) {
+				foreach ( $qas as $qa ) {
+					$q = trim( wp_strip_all_tags( $qa[1] ) );
+					$a = trim( wp_strip_all_tags( $qa[2] ) );
+					if ( '' !== $q && '' !== $a ) {
+						$faqs[] = array( 'question' => $q, 'answer' => $a );
+					}
+				}
+			}
+		}
+
+		if ( ! empty( $faqs ) ) {
+			update_post_meta( $wp_post_id, '_aime_faq_data', $faqs );
+		}
+	}
+
+	/**
+	 * Convert standard article HTML into native WordPress Gutenberg blocks.
+	 *
+	 * When posts are stored with Gutenberg block grammar (<!-- wp:... -->),
+	 * opening the post in Gutenberg loads native blocks directly (no "Convert to
+	 * blocks" prompt needed).
+	 *
+	 * - FAQ items become native core/details blocks (interactive Accordions).
+	 * - Quick Answer boxes become native core/group blocks.
+	 * - Headings become core/heading blocks.
+	 * - Lists become core/list blocks.
+	 * - Paragraphs become core/paragraph blocks.
+	 *
+	 * @param string $html Sanitized HTML.
+	 * @return string Gutenberg block-serialized content.
+	 */
+	public static function convert_to_gutenberg_blocks( string $html ): string {
+		if ( '' === trim( $html ) || ( function_exists( 'has_blocks' ) && has_blocks( $html ) ) ) {
+			return $html;
+		}
+
+		// 1. Convert FAQ sections into native core/details (Accordion) blocks.
+		$html = preg_replace_callback(
+			'/<h[34][^>]*class=["\'][^"\']*aime-faq-q[^"\']*["\'][^>]*>(.*?)<\/h[34]>\s*<p[^>]*class=["\'][^"\']*aime-faq-a[^"\']*["\'][^>]*>(.*?)<\/p>/is',
+			function ( $m ) {
+				$q      = trim( wp_strip_all_tags( $m[1] ) );
+				$a      = trim( $m[2] );
+				$q_attr = esc_attr( $q );
+				return "<!-- wp:details {\"summary\":\"{$q_attr}\",\"className\":\"aime-faq-item\"} -->\n"
+					. "<details class=\"wp-block-details aime-faq-item\"><summary>{$q}</summary>\n"
+					. "<!-- wp:paragraph -->\n"
+					. "<p>{$a}</p>\n"
+					. "<!-- /wp:paragraph -->\n"
+					. "</details>\n"
+					. "<!-- /wp:details -->\n";
+			},
+			$html
+		);
+
+		// 2. Convert Quick Answer Box into a styled native Group block.
+		$html = preg_replace_callback(
+			'/<div\b[^>]*class=["\'][^"\']*aime-quick-answer[^"\']*["\'][^>]*>(.*?)<\/div>/is',
+			function ( $m ) {
+				$inner = trim( $m[1] );
+				return "<!-- wp:group {\"className\":\"aime-quick-answer\"} -->\n"
+					. "<div class=\"wp-block-group aime-quick-answer\">\n"
+					. "<!-- wp:paragraph -->\n"
+					. "<p>{$inner}</p>\n"
+					. "<!-- /wp:paragraph -->\n"
+					. "</div>\n"
+					. "<!-- /wp:group -->\n";
+			},
+			$html
+		);
+
+		// 3. Convert Headings (h2, h3, h4).
+		$html = preg_replace_callback(
+			'/<h([2-4])\b([^>]*)>(.*?)<\/h\1>/is',
+			function ( $m ) {
+				$level = (int) $m[1];
+				$attrs = trim( $m[2] );
+				$text  = trim( $m[3] );
+				return "<!-- wp:heading {\"level\":{$level}} -->\n"
+					. "<h{$level} class=\"wp-block-heading\" {$attrs}>{$text}</h{$level}>\n"
+					. "<!-- /wp:heading -->\n";
+			},
+			$html
+		);
+
+		// 4. Convert unordered and ordered lists.
+		$html = preg_replace_callback(
+			'/<(ul|ol)\b([^>]*)>(.*?)<\/\1>/is',
+			function ( $m ) {
+				$tag        = strtolower( $m[1] );
+				$items      = trim( $m[3] );
+				$is_ordered = ( 'ol' === $tag );
+				$json_attr  = $is_ordered ? '{"ordered":true}' : '';
+				return "<!-- wp:list {$json_attr} -->\n"
+					. "<{$tag} class=\"wp-block-list\">{$items}</{$tag}>\n"
+					. "<!-- /wp:list -->\n";
+			},
+			$html
+		);
+
+		// 5. Convert standalone <p> tags not yet wrapped in block comments.
+		$html = preg_replace_callback(
+			'/(?<!<!-- wp:paragraph -->\n)(?<!<!-- wp:paragraph {"className":"aime-faq-a"} -->\n)<p\b([^>]*)>(.*?)<\/p>/is',
+			function ( $m ) {
+				$attrs = trim( $m[1] );
+				$text  = trim( $m[2] );
+				return "<!-- wp:paragraph -->\n"
+					. "<p {$attrs}>{$text}</p>\n"
+					. "<!-- /wp:paragraph -->\n";
+			},
+			$html
+		);
+
+		return $html;
 	}
 
 	private function log_history( int $article_id, string $action, string $details = '' ): void {

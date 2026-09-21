@@ -106,7 +106,7 @@ class SeoAnalyzerService {
 
 	private function calculate_seo_score( string $title, string $text, array $keywords, string $meta_title, string $meta_desc, string $html = '' ): int {
 		$score = 30; // Base score for having content.
-		$words = str_word_count( $text );
+		$words = function_exists( 'aime_count_words' ) ? aime_count_words( $text ) : str_word_count( $text );
 
 		// Title length (30-65 chars ideal).
 		$title_len = mb_strlen( $title );
@@ -175,7 +175,8 @@ class SeoAnalyzerService {
 		if ( $words > 0 && $keywords ) {
 			$primary     = mb_strtolower( trim( $keywords[0] ) );
 			$occurrences = $primary ? mb_substr_count( $text_lower, $primary ) : 0;
-			$density     = ( $occurrences * str_word_count( $primary ) / $words ) * 100;
+			$kw_words    = function_exists( 'aime_count_words' ) ? max( 1, aime_count_words( $primary ) ) : max( 1, str_word_count( $primary ) );
+			$density     = ( $occurrences * $kw_words / $words ) * 100;
 			if ( $density >= 0.3 && $density <= 3.0 ) {
 				$score += 12;
 			} elseif ( $density > 0 ) {
@@ -183,11 +184,29 @@ class SeoAnalyzerService {
 			}
 		}
 
+		// Subheading contains primary keyword.
+		if ( $html && $keywords ) {
+			$primary = mb_strtolower( trim( $keywords[0] ) );
+			if ( preg_match_all( '/<h[23][^>]*>(.*?)<\/h[23]>/is', $html, $h_matches ) ) {
+				foreach ( $h_matches[1] as $htxt ) {
+					if ( false !== mb_strpos( mb_strtolower( wp_strip_all_tags( $htxt ) ), $primary ) ) {
+						$score += 5;
+						break;
+					}
+				}
+			}
+		}
+
+		// FAQ section or Quick Answer callout (GEO signals).
+		if ( preg_match( '/(FAQ|Frequently Asked Questions|aime-quick-answer)/i', $html ) ) {
+			$score += 5;
+		}
+
 		return min( 100, max( 0, $score ) );
 	}
 
 	private function calculate_readability_score( string $text, string $html = '' ): int {
-		$words     = str_word_count( $text );
+		$words     = function_exists( 'aime_count_words' ) ? aime_count_words( $text ) : str_word_count( $text );
 		$sentences = max( 1, preg_match_all( '/[.!?。！？]+/u', $text ) );
 
 		if ( $words < 10 ) {

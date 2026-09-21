@@ -725,6 +725,7 @@ class ChatbotModule extends Module {
 			'hasPro'        => aime_has_pro(),
 			'businessHours' => json_decode( $bot->business_hours ?: '{}', true ) ?: array(),
 			'siteUrl'       => home_url(),
+			'siteName'      => get_bloginfo( 'name' ),
 		) );
 	}
 

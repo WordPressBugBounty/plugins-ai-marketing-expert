@@ -30,6 +30,7 @@ class SettingsController {
 		'enable_read_receipts'      => true,
 		'notify_new_chat'           => false,
 		'notify_email'              => '',
+		'enable_buy_now_link'       => false,
 	);
 
 	private const THEMES = array( 'default', 'modern', 'minimal' );
@@ -94,6 +95,7 @@ class SettingsController {
 			'enable_typing_indicator',
 			'enable_read_receipts',
 			'notify_new_chat',
+			'enable_buy_now_link',
 		);
 		foreach ( $bool_fields as $field ) {
 			if ( isset( $params[ $field ] ) ) {

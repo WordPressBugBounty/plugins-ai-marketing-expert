@@ -8,11 +8,11 @@ Stable tag: trunk
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-All-in-one AI marketing: Email campaigns, AI content generator, AI SEO analyzer, social scheduling, AI chatbot, AI workflows, and AI B2B lead finder.
+All-in-one AI marketing: Email campaigns, B2B lead finder, AI content generator, SEO analyzer, social scheduling, AI chatbot, workflow automation, and WooCommerce abandoned cart recovery.
 
 == Description ==
 
-**AI Marketing Expert** is the most complete AI-powered marketing suite for WordPress. Instead of paying for Apollo/Hunter, Mailchimp, Jasper, Semrush, Hootsuite, Intercom, and Zapier separately, you get all in one place — B2B lead finder, email marketing, content generation, SEO, social media, a live AI chatbot, and workflow automation — built right into your WordPress admin.
+**AI Marketing Expert** is the most complete AI-powered marketing suite for WordPress. Instead of paying for Apollo/Hunter, Mailchimp, Jasper, Semrush, Hootsuite, Intercom, CartBounty, and Zapier separately, you get all in one place — B2B lead finder, email marketing, content generation, SEO, social media, a live AI chatbot, workflow automation, and WooCommerce abandoned cart recovery — built right into your WordPress admin.
 
 Powered by your choice of leading AI models (ChatGPT, Claude, Gemini, or OpenRouter), every module is designed to save you hours every week and help you grow your audience consistently without burnout.
 
@@ -20,7 +20,7 @@ The built-in **SEO Analyzer** module gives you AI-powered keyword research, on-p
 
 🔗 **[View Plugin Website](https://wpthemespace.com/ai-marketing-expert/)** | 🚀 **[Upgrade to Pro](https://wpthemespace.com/product/ai-marketing-expert/)**
 
-Whether you are a blogger, a small business owner, a WooCommerce store, or a freelancer managing client sites, AI Marketing Expert gives you enterprise-grade marketing automation at zero extra tool cost.
+Whether you are a blogger, an e-commerce store owner, a small business, or a freelancer managing client sites, AI Marketing Expert gives you enterprise-grade marketing automation at zero extra tool cost.
 
 ---
 
@@ -99,6 +99,9 @@ A complete email CRM, cold outreach, and campaign system built inside WordPress 
 Write complete, SEO-optimized blog posts with one click using the AI content generator.
 
 * Generate full articles: title, introduction, structured body sections, and CTA
+* **Deep Humanize (Enhanced in 1.2.6)** — Rewrite and polish text with strict structural preservation of Table of Contents, Quick Answer boxes, FAQs, intro paragraphs, and media elements
+* **Contextual Internal Linking (NEW in 1.2.6)** — Automatically scans existing articles and contextually injects natural internal links on publish
+* **SEO Multi-Plugin Sync (NEW in 1.2.6)** — Synchronizes Focus Keyword, Meta Title, and Meta Description directly into Yoast SEO, Rank Math, and All-in-One SEO (AIOSEO)
 * Per-section SEO analysis: keyword density and readability scoring
 * Configure word count, tone, target keyword, categories, and tags
 * Publish directly or save as WordPress draft
@@ -179,20 +182,45 @@ Add an intelligent AI chatbot to your WordPress site for 24/7 customer support, 
 
 ---
 
-= ⚙️ Workflow Automation (Free + Pro) =
+= 🛒 WooCommerce Cart Abandonment & Recovery (Free + Pro) =
 
-Chain actions from every module into scheduled, automated marketing workflows — like a built-in Zapier for your marketing stack.
+Recover lost store revenue automatically without paying for separate expensive SaaS tools like CartBounty, Klaviyo, or Abandoned Cart Pro.
 
-* Visual workflow builder with step-by-step action chains
-* Cross-module actions: generate content, send campaigns, post to social media, and more
-* Schedule triggers (hourly, daily, weekly) and event triggers (new subscriber, post published, and more)
-* Run-now manual execution with per-step run history
-* Ready-made workflow templates to start from
+* **Real-Time Session Tracking** — Tracks both logged-in customers and guest visitors across browsing sessions using secure tokens (`aime_cart_token`).
+* **Guest Checkout AJAX Capture** — Automatically captures guest email, name, and phone in the background the moment they type into checkout fields—before an order is placed.
+* **Automated Inactivity Detection** — Scheduled 15-minute WP-Cron evaluates inactive sessions (configurable, default 30 mins) and marks them as abandoned.
+* **1-Click Cart Restoration Deep Links** — Generates encrypted restoration links (`{event.recovery_url}`) that reload items, variations, and quantities in 1-click and direct shoppers straight to checkout.
+* **1-Click Single-Quantity Checkout** — Automatically detects accidental duplicate quantities (`cart_type: duplicate_qty`) and provides a 1-click deep link (`{event.single_qty_url}`) to complete checkout with just 1 item without manual cart editing.
+* **1-Click Single-Item Checkout Links** — For carts with multiple products (`cart_type: multiple_items`), generates individual 1-click direct checkout links (`{event.single_item_links}`) so shoppers can easily purchase just the item they want most.
+* **Smart Cart Type Branching** — Branch workflows based on cart contents (`single_item`, `duplicate_qty`, `multiple_items`) with pre-built smart templates and AI text-to-workflow recipes.
+* **Order Recovery Detection** — Automatically detects when a customer completes their order, marking carts as recovered and attributing recovered revenue.
+* **Universal Workflow Integration** — Seamlessly triggers automated recovery email sequences, discount offers, and store manager alerts via Workflow Automation.
 
 **Free vs Pro**
 
-* Free: 2 active workflows, 3 steps per workflow, 30 runs/month
-* Pro: Unlimited workflows, unlimited steps, unlimited runs
+* Free: Real-time cart tracking, guest capture, 1-click recovery URLs, 1 active recovery workflow sequence
+* Pro: Unlimited recovery workflows, multi-step timed recovery funnels, dynamic coupons, advanced attribution analytics
+
+---
+
+= ⚙️ Workflow Automation (Free + Pro) =
+
+Chain actions from every module into scheduled, automated marketing workflows — like a built-in Zapier for your WordPress marketing stack.
+
+* **Visual Workflow Builder** — Canvas-based visual step editor with drag-and-drop branching and real-time execution graphs
+* **Text-to-Workflow AI Generator (NEW in 1.2.6)** — Describe your automation in plain natural language (English or Bengali) or pick from 8 high-converting recipes, and AI builds the entire canvas graph automatically
+* **Wait / Delay Step (NEW in 1.2.6)** — Pause workflow execution between steps for seconds, minutes, hours, or days (e.g. Abandoned Cart -> Wait 1 Hour -> Send Email 1 -> Wait 24 Hours -> Send Email 2)
+* **Direct Email Sending** — Dispatch instant emails using your configured multi-connection SMTP pool with dynamic token substitution
+* **E-Commerce Triggers** — WooCommerce Cart Abandoned and WooCommerce Order Completed with minimum value filters and recovery URLs
+* **Lead & Event Triggers** — Inbound Webhook, Contact Form 7 Submission, User Registered, Comment Posted, New Subscriber, and Post Published
+* **Schedule Triggers** — Once, hourly, daily, weekly, monthly, or custom intervals
+* **Conditional Logic** — Branch workflows with Yes/No paths based on upstream step results, text matches, or numeric score comparisons (Pro)
+* **Pre-Built Blueprint Templates** — Instant starter blueprints including Cart Recovery, Post-Purchase Review Requests, CF7 Auto-Responders, and Content Repurposing engines
+
+**Free vs Pro**
+
+* Free: 2 active workflows, 3 steps per workflow, 30 runs/month, core triggers, starter templates
+* Pro: Unlimited workflows, unlimited steps, unlimited runs, all webhook & event triggers, conditional logic, full template library
 
 ---
 
@@ -352,6 +380,28 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 
 == Changelog ==
 
+= 1.2.6 =
+* New: WooCommerce Abandoned Cart Recovery Engine — Real-time cart session tracking, guest checkout email capture via background AJAX, automated 15-minute cron inactivity detection, and encrypted 1-click cart restoration deep links directly to checkout.
+* New: WooCommerce Smart Cart Recovery & 3-Way Branching — 1-click single-quantity checkout deep links ({event.single_qty_url}), individual product recovery links ({event.single_item_links}), automated cart composition classification (single item, duplicate quantity, multiple items), and 3-way condition branching templates.
+* New: Admin Dashboard Background Cron Dispatcher — Automatically executes background tasks, email queues, abandoned cart recovery, and scheduled workflows when administrators visit the WordPress dashboard or keep wp-admin open (WordPress Heartbeat integration) with 60-second throttling and zero page load latency.
+* New: Workflow Delay / Wait Step — Pause execution between automation nodes for seconds, minutes, hours, or days (e.g., Cart Abandoned -> Wait 1 Hour -> Send Recovery Email).
+* New: Direct Email Send Action — Dispatch instant, personalized emails with SMTP multi-connection rotation and dynamic workflow tokens ({event.recovery_url}, {event.customer_name}, {event.product_names}).
+* New: E-Commerce & Event Triggers — Added WooCommerce Cart Abandoned, WooCommerce Order Completed, User Registered, Approved Comment Posted, Contact Form 7 Submission, and Inbound Webhook triggers.
+* New: Text-to-Workflow AI Generator — Natural language automation builder allowing users to describe their marketing workflows in plain text (English or Bengali) with 10 built-in high-converting recipes (including 3-Way Smart Cart Recovery).
+* New: E-Commerce & Lead Workflow Templates — Pre-built templates for Abandoned Cart Recovery, Post-Purchase Review Requests with timed delay, CF7 Lead Auto-Responders, and Inbound Webhook Ingestion.
+* New: Multi-Plugin SEO Postmeta Synchronization — Automatic 1-click synchronization of generated SEO Title, Meta Description, and Focus Keyword into Yoast SEO, Rank Math, and All-in-One SEO (AIOSEO), plus lightweight frontend meta fallback.
+* New: Contextual Internal Link Engine — Automatically discovers relevant published articles across your WordPress site and contextually injects natural internal links on publish.
+* New: B2B Lead Scraper & Verifier — Enhanced lead prospecting with on-site contact extraction and live DNS MX deliverability verification.
+* Improved: Content Generator Deep Humanize — Overhauled rewriter with strict structure protection to preserve Table of Contents (TOC), Quick Answer boxes, introductory paragraphs, and media elements without truncation or loss.
+* Improved: Settings Organization — Consolidated Automation toggles (Auto SEO Optimize, Auto Generate Meta, Auto Generate Excerpt, Auto Internal Linking) into the Generation tab under Advanced settings for a smoother single-screen experience.
+* Improved: Workflow Blog Post & Ad Copy Actions — Added Brand Voice selection, Content Presets, word count ceilings, multi-category taxonomy search, author assignment, and WooCommerce product rotation.
+* Improved: Facebook Publishing & Error #200 Hints — Explicit actionable guidance for Facebook permissions (pages_manage_posts, pages_read_engagement), Page Access Token detection, and separated Instagram validation.
+* New: AI Chatbot Safe Product Links & Configurable Buy Now — Product recommendations now default safely to direct product page permalinks to prevent empty cart errors on stores without cart AJAX endpoints, with an optional "Direct Checkout / Buy Now Link" toggle in bot settings for stores preferring direct checkout.
+* Improved: AI Chatbot Pro Branding — "Powered by AI Marketing Expert" footer dynamically links to the site's home URL for Pro users while retaining plugin branding on Free installations.
+* Fixed: Email Campaign Sending  Error
+* New: Email Web-View Browser Display — Added dedicated web-view handler (?aime_track=web_view) allowing recipients to view rich email designs directly in their browser.
+* Improved: Email Sender Resilience — Added defensive parameter validation and error boundaries in campaign dispatcher so invalid recipient addresses or transient SMTP timeouts fail gracefully without stalling the entire batch.
+
 = 1.2.5 =
 * New: B2B Lead Finder & Autopilot Pipeline — Discover, filter, and extract high-converting B2B prospects by role, industry, location, and company size with 1-click list collection and recurring autopilot sync.
 * New: LinkedIn Publishing & OAuth — Connect LinkedIn personal and organization accounts to schedule and publish AI-generated business updates and articles directly.
@@ -444,6 +494,9 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 * React-based unified admin dashboard
 
 == Upgrade Notice ==
+
+= 1.2.6 =
+Major Release: Smart WooCommerce Cart Recovery with 1-click single-qty checkout, Admin Dashboard Background Cron, Workflow Wait/Delay step, AI Text-to-Workflow Generator, Email Campaign processor resilience fix, and AI Chatbot product link safeguards. Recommended for all users.
 
 = 1.2.5 =
 Major Release: Brand new B2B Lead Finder & Autopilot Pipeline to discover and collect verified leads automatically, plus Dashboard widget 1-click chatbot deep links, inline human takeover shortcuts, IMAP bounce handling, and database maintenance improvements. Highly recommended for all users.

@@ -25,6 +25,7 @@ class SettingsController {
 		'auto_seo_optimize'     => true,
 		'auto_generate_meta'    => true,
 		'auto_generate_excerpt' => true,
+		'auto_internal_links'   => true,
 		'stock_provider'        => 'pexels',
 		'inline_images'         => 0,
 		'inline_image_size'     => 'large',
@@ -47,6 +48,7 @@ class SettingsController {
 			$merged['auto_seo_optimize']     = false;
 			$merged['auto_generate_meta']    = false;
 			$merged['auto_generate_excerpt'] = false;
+			$merged['auto_internal_links']   = false;
 		}
 
 		return new \WP_REST_Response( $merged );
@@ -120,17 +122,11 @@ class SettingsController {
 			}
 		}
 
-		$bool_fields = array( 'auto_seo_optimize', 'auto_generate_meta', 'auto_generate_excerpt' );
+		$bool_fields = array( 'auto_seo_optimize', 'auto_generate_meta', 'auto_generate_excerpt', 'auto_internal_links' );
 		foreach ( $bool_fields as $field ) {
-			if ( isset( $params[ $field ] ) ) {
-				$current[ $field ] = aime_has_pro() ? (bool) $params[ $field ] : false;
+			if ( isset( $params[ $field ] ) && aime_has_pro() ) {
+				$current[ $field ] = (bool) $params[ $field ];
 			}
-		}
-
-		if ( ! aime_has_pro() ) {
-			$current['auto_seo_optimize']     = false;
-			$current['auto_generate_meta']    = false;
-			$current['auto_generate_excerpt'] = false;
 		}
 
 		update_option( self::OPTION_KEY, $current, false );

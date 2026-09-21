@@ -42,6 +42,15 @@ class ConditionAction extends BaseAction {
 				$matched  = '' !== $value && false !== mb_stripos( $haystack, $value );
 				break;
 
+			case 'event_field_equals':
+				$field  = trim( (string) ( $config['field'] ?? '' ) );
+				$actual = WorkflowTokens::dot_path(
+					is_array( $context['event'] ?? null ) ? $context['event'] : array(),
+					$field
+				);
+				$matched = strtolower( trim( (string) $actual ) ) === strtolower( trim( $value ) );
+				break;
+
 			case 'reference_compare':
 				// Numeric compare against an upstream step's structured
 				// reference field — e.g. gate publishing on the SEO audit's

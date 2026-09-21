@@ -101,15 +101,46 @@ class BlogPostAction extends BaseAction {
 			$keywords = array_values( array_unique( $keywords ) );
 		}
 
-		// Brand voice (Pro): resolve the workflow's voice into system instructions,
-		// mirroring GenerateController's preset pattern.
+		// Preset (Content Generator template): load preset structure & prompts if configured.
 		$preset    = null;
-		$voice_prompt = self::brand_voice_system_prompt( $context );
+		$preset_id = absint( $config['preset_id'] ?? 0 );
+		if ( $preset_id > 0 ) {
+			global $wpdb;
+			$db_preset = $wpdb->get_row( $wpdb->prepare(
+				"SELECT * FROM {$wpdb->prefix}aime_content_presets WHERE id = %d",
+				$preset_id
+			) );
+			if ( $db_preset ) {
+				$preset = (object) array(
+					'prompt_template'     => (string) ( $db_preset->prompt_template ?? '' ),
+					'system_instructions' => (string) ( $db_preset->system_instructions ?? '' ),
+				);
+			}
+		}
+
+		// Brand voice (Pro): resolve step voice or workflow default into system instructions.
+		$brand_voice_id = absint( $config['brand_voice_id'] ?? 0 );
+		$voice_prompt   = '';
+		if ( $brand_voice_id > 0 ) {
+			$voice_controller = '\\WPSpace\\AiMarketingExpert\\Modules\\ContentGenerator\\Controllers\\WorkflowController';
+			if ( class_exists( $voice_controller ) ) {
+				$voice_prompt = (string) $voice_controller::get_brand_voice_prompt( $brand_voice_id );
+			}
+		}
+		if ( '' === $voice_prompt ) {
+			$brand_voice_id = absint( $context['brand_voice_id'] ?? 0 );
+			$voice_prompt   = self::brand_voice_system_prompt( $context );
+		}
+
 		if ( '' !== $voice_prompt ) {
-			$preset = (object) array(
-				'prompt_template'     => '',
-				'system_instructions' => $voice_prompt,
-			);
+			if ( null === $preset ) {
+				$preset = (object) array(
+					'prompt_template'     => '',
+					'system_instructions' => $voice_prompt,
+				);
+			} else {
+				$preset->system_instructions = trim( ( $preset->system_instructions ?? '' ) . "\n\n" . $voice_prompt );
+			}
 		}
 
 		// Inject AI Brain brief into system instructions (same path as brand voice).
@@ -330,6 +361,8 @@ class BlogPostAction extends BaseAction {
 			'tag_ids'           => wp_json_encode( $tags ),
 			'meta_title'        => $meta_title,
 			'meta_description'  => $meta_desc,
+			'preset_id'         => $preset_id > 0 ? $preset_id : null,
+			'brand_voice_id'    => $brand_voice_id > 0 ? $brand_voice_id : null,
 		);
 		if ( ! empty( $featured['attachment_id'] ) ) {
 			$article_fields['featured_image_id'] = (int) $featured['attachment_id'];
@@ -349,6 +382,8 @@ class BlogPostAction extends BaseAction {
 			'seo_title'        => $meta_title,
 			'meta_description' => $meta_desc,
 			'slug'             => $slug,
+			'preset_id'        => $preset_id,
+			'brand_voice_id'   => $brand_voice_id,
 		);
 		$preview   = sprintf( /* translators: %s: article title */ __( 'Generated article: %s', 'ai-marketing-expert' ), $title );
 

@@ -378,6 +378,7 @@ class Admin {
 			'adminEmail'     => get_option( 'admin_email' ),
 			'currentPage'    => $current_page,
 			'hasWooCommerce' => class_exists( 'WooCommerce' ),
+			'wooCartCutoffMinutes' => (int) ( ( get_option( 'aime_settings', array() )['woo_cart_cutoff_minutes'] ?? 0 ) ?: 30 ),
 			'wpRoles'        => wp_roles()->get_names(),
 			'smtpProviders'  => SmtpProvider::get_providers(),
 			'aiConfigured'   => ! empty( AiProvider::get_active_model( 'text' )['api_key'] ),

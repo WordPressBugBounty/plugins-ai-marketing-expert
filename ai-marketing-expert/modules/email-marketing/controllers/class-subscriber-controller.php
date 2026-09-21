@@ -10,6 +10,7 @@ namespace WPSpace\AiMarketingExpert\Modules\EmailMarketing\Controllers;
 // phpcs:disable WordPress.DB.PreparedSQL.InterpolatedNotPrepared, WordPress.DB.PreparedSQL.NotPrepared, WordPress.DB.PreparedSQLPlaceholders.UnfinishedPrepare, WordPress.DB.PreparedSQLPlaceholders.ReplacementsWrongNumber
 
 use WPSpace\AiMarketingExpert\EmailValidator;
+use WPSpace\AiMarketingExpert\Modules\EmailMarketing\Services\B2bScraperService;
 
 if ( ! defined( 'ABSPATH' ) ) {
 	exit;
@@ -1907,7 +1908,11 @@ class SubscriberController {
 		$location     = sanitize_text_field( $request->get_param( 'location' ) ?? '' );
 		$company_size = sanitize_text_field( $request->get_param( 'company_size' ) ?? '' );
 		$keyword      = sanitize_text_field( $request->get_param( 'keyword' ) ?? '' );
-		$limit        = min( 50, max( 3, absint( $request->get_param( 'limit' ) ?: 10 ) ) );
+		$raw_per_page = $request->get_param( 'per_page' );
+		$raw_limit    = $request->get_param( 'limit' );
+		$limit        = ( null !== $raw_per_page && '' !== $raw_per_page ) ? absint( $raw_per_page ) : absint( $raw_limit ?: 10 );
+		$limit        = min( 50, max( 3, $limit ?: 10 ) );
+		$page         = max( 1, absint( $request->get_param( 'page' ) ?: 1 ) );
 
 		if ( empty( $industry ) && empty( $role ) && empty( $keyword ) ) {
 			return new \WP_REST_Response( array(
@@ -1915,140 +1920,17 @@ class SubscriberController {
 			), 400 );
 		}
 
-		$criteria = array();
-		if ( $industry ) {
-			$criteria[] = "Industry: {$industry}";
-		}
-		if ( $role ) {
-			$criteria[] = "Job Role / Title: {$role}";
-		}
-		if ( $location ) {
-			$criteria[] = "Target Location / Country: {$location}";
-		}
-		if ( $company_size ) {
-			$criteria[] = "Company Size: {$company_size}";
-		}
-		if ( $keyword ) {
-			$criteria[] = "Keywords / Focus: {$keyword}";
-		}
-
-		$prompt = sprintf(
-			"You are an expert B2B lead prospecting assistant. Generate %d realistic, highly targeted B2B prospect profiles matching these criteria:\n" .
-			"%s\n\n" .
-			"Return ONLY a valid JSON object with a \"leads\" array conforming to this exact structure:\n" .
-			"{\n" .
-			"  \"leads\": [\n" .
-			"    {\n" .
-			"      \"first_name\": \"string\",\n" .
-			"      \"last_name\": \"string\",\n" .
-			"      \"company\": \"string (realistic business name)\",\n" .
-			"      \"title\": \"string (decision maker role, e.g. Founder, CEO, VP, Director)\",\n" .
-			"      \"domain\": \"string (valid company domain format without http/www, e.g. acme-tech.com)\",\n" .
-			"      \"email\": \"string (business email first.last@domain or first@domain)\",\n" .
-			"      \"location\": \"string (city, country)\",\n" .
-			"      \"website\": \"string (https://domain)\",\n" .
-			"      \"phone\": \"string (realistic phone or empty)\",\n" .
-			"      \"confidence\": \"string (e.g. 92%%)\"\n" .
-			"    }\n" .
-			"  ]\n" .
-			"}\n" .
-			"Important: Return ONLY the JSON object. Do not include markdown code fences (```json) or extra text outside the JSON.",
-			$limit,
-			implode( "\n", $criteria )
+		$criteria = array(
+			'industry'     => $industry,
+			'role'         => $role,
+			'location'     => $location,
+			'company_size' => $company_size,
+			'keyword'      => $keyword,
 		);
 
-		$ai_res = \WPSpace\AiMarketingExpert\AiProvider::generate( $prompt, 'text', 6000, array( 'json_mode' => true ) );
-		if ( empty( $ai_res['success'] ) ) {
-			return new \WP_REST_Response( array(
-				'message' => $ai_res['message'] ?? __( 'AI lead search failed.', 'ai-marketing-expert' ),
-			), 500 );
-		}
+		$result = B2bScraperService::discover_leads( $criteria, $page, $limit );
 
-		$raw_json = (string) ( $ai_res['content'] ?? '' );
-		$parsed   = aime_parse_ai_json( $raw_json );
-		if ( ! is_array( $parsed ) ) {
-			$parsed = json_decode( $raw_json, true );
-		}
-		if ( isset( $parsed['leads'] ) && is_array( $parsed['leads'] ) ) {
-			$parsed = $parsed['leads'];
-		} elseif ( isset( $parsed['prospects'] ) && is_array( $parsed['prospects'] ) ) {
-			$parsed = $parsed['prospects'];
-		} elseif ( isset( $parsed['data'] ) && is_array( $parsed['data'] ) ) {
-			$parsed = $parsed['data'];
-		} elseif ( isset( $parsed['email'] ) ) {
-			$parsed = array( $parsed );
-		}
-
-		// Robust fallback: extract individual valid JSON objects if response was partially cut off or wrapped
-		if ( ! is_array( $parsed ) || empty( $parsed ) ) {
-			$recovered = array();
-			if ( preg_match_all( '/\{[^{}]*?"email"\s*:\s*"[^"]+?"[^{}]*?\}/s', $raw_json, $matches ) ) {
-				foreach ( $matches[0] as $match ) {
-					$item = json_decode( $match, true );
-					if ( is_array( $item ) && ! empty( $item['email'] ) ) {
-						$recovered[] = $item;
-					}
-				}
-			}
-			if ( ! empty( $recovered ) ) {
-				$parsed = $recovered;
-			}
-		}
-
-		if ( ! is_array( $parsed ) || empty( $parsed ) ) {
-			return new \WP_REST_Response( array(
-				'items'   => array(),
-				'total'   => 0,
-				'message' => __( 'No leads found matching criteria.', 'ai-marketing-expert' ),
-			) );
-		}
-
-		global $wpdb;
-		$subscribers_table = $wpdb->prefix . 'aime_subscribers';
-
-		$leads = array();
-		foreach ( $parsed as $item ) {
-			if ( ! is_array( $item ) ) {
-				continue;
-			}
-			$email = sanitize_email( $item['email'] ?? '' );
-			if ( ! is_email( $email ) ) {
-				continue;
-			}
-
-			$domain = (string) ( $item['domain'] ?? '' );
-			if ( empty( $domain ) && false !== strpos( $email, '@' ) ) {
-				$parts  = explode( '@', $email );
-				$domain = (string) end( $parts );
-			}
-
-			// Validate DNS / MX deliverability.
-			$has_mx = EmailValidator::has_mailable_domain( $domain );
-
-			// Check if already in local database.
-			$existing_id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$subscribers_table} WHERE email = %s", $email ) );
-
-			$leads[] = array(
-				'first_name'    => sanitize_text_field( $item['first_name'] ?? '' ),
-				'last_name'     => sanitize_text_field( $item['last_name'] ?? '' ),
-				'company'       => sanitize_text_field( $item['company'] ?? '' ),
-				'title'         => sanitize_text_field( $item['title'] ?? '' ),
-				'domain'        => sanitize_text_field( $domain ),
-				'email'         => $email,
-				'location'      => sanitize_text_field( $item['location'] ?? '' ),
-				'website'       => esc_url_raw( $item['website'] ?? "https://{$domain}" ),
-				'phone'         => sanitize_text_field( $item['phone'] ?? '' ),
-				'confidence'    => sanitize_text_field( $item['confidence'] ?? '85%' ),
-				'mx_verified'   => $has_mx,
-				'is_in_crm'     => ( $existing_id > 0 ),
-				'subscriber_id' => $existing_id,
-			);
-		}
-
-		return new \WP_REST_Response( array(
-			'items' => $leads,
-			'total' => count( $leads ),
-		) );
+		return new \WP_REST_Response( $result );
 	}
 
 	/**
@@ -2209,7 +2091,10 @@ class SubscriberController {
 			'total_skipped_mx'   => 0,
 		);
 
-		return new \WP_REST_Response( array_merge( $defaults, is_array( $config ) ? $config : array() ) );
+		$merged = array_merge( $defaults, is_array( $config ) ? $config : array() );
+		$merged['page_pointer'] = B2bScraperService::get_autopilot_page_pointer( $merged );
+
+		return new \WP_REST_Response( $merged );
 	}
 
 	/**
@@ -2333,6 +2218,29 @@ class SubscriberController {
 	}
 
 	/**
+	 * Reset persistent Autopilot page pointer back to Page 1.
+	 */
+	public function reset_autopilot_pointer( \WP_REST_Request $request ): \WP_REST_Response {
+		if ( ! aime_has_pro() ) {
+			return new \WP_REST_Response( array(
+				'code'    => 'pro_required',
+				'message' => __( 'B2B Lead Autopilot is a Pro feature.', 'ai-marketing-expert' ),
+			), 403 );
+		}
+
+		$config = get_option( 'aime_lead_autopilot_config', array() );
+		$config = is_array( $config ) ? $config : array();
+
+		B2bScraperService::reset_autopilot_page_pointer( $config );
+
+		return new \WP_REST_Response( array(
+			'success'      => true,
+			'message'      => __( 'Autopilot page pointer reset to Page 1.', 'ai-marketing-expert' ),
+			'page_pointer' => 1,
+		) );
+	}
+
+	/**
 	 * Invoked daily by WP-Cron scheduler.
 	 */
 	public function run_scheduled_autopilot(): void {
@@ -2345,7 +2253,7 @@ class SubscriberController {
 	}
 
 	/**
-	 * Core Autopilot Pipeline with 3-tier deduplication & DNS MX verification.
+	 * Core Autopilot Pipeline with persistent pagination, pre-CRM deduplication & DNS MX verification.
 	 */
 	public function execute_autopilot_pipeline( array $config, bool $force = false ): array {
 		global $wpdb;
@@ -2353,7 +2261,6 @@ class SubscriberController {
 		$now               = current_time( 'mysql', true );
 
 		$daily_target = min( 500, max( 5, absint( $config['daily_target'] ?? 25 ) ) );
-		$mode         = ( 'prompt' === ( $config['mode'] ?? 'filters' ) ) ? 'prompt' : 'filters';
 		$target_list  = absint( $config['target_list_id'] ?? 0 );
 		$tag_names    = (array) ( $config['tag_names'] ?? array( 'AI-Autopilot' ) );
 		$tag_ids      = ! empty( $tag_names ) ? $this->resolve_tag_names( $tag_names ) : array();
@@ -2362,8 +2269,11 @@ class SubscriberController {
 		$skipped_duplicates_count = 0;
 		$skipped_mx_count         = 0;
 		$attempt                  = 0;
-		$max_attempts             = 4;
+		$max_attempts             = 5;
 		$seen_domains             = array();
+
+		// Fetch current persistent page pointer
+		$current_page = B2bScraperService::get_autopilot_page_pointer( $config );
 
 		while ( $imported_count < $daily_target && $attempt < $max_attempts ) {
 			$attempt++;
@@ -2371,101 +2281,22 @@ class SubscriberController {
 			// Request a sensible batch with buffer for invalid MX or duplicates.
 			$batch_limit = min( 25, max( 5, $needed + 5 ) );
 
-			// Build AI prompt based on mode.
-			if ( 'prompt' === $mode && ! empty( $config['prompt'] ) ) {
-				$prompt_base = "Generate {$batch_limit} realistic, high-intent B2B prospect profiles matching this exact specification:\n" .
-					$config['prompt'] . "\n";
-			} else {
-				$criteria = array();
-				if ( ! empty( $config['industry'] ) ) {
-					$criteria[] = "Industry: {$config['industry']}";
-				}
-				if ( ! empty( $config['role'] ) ) {
-					$criteria[] = "Job Role / Title: {$config['role']}";
-				}
-				if ( ! empty( $config['location'] ) ) {
-					$criteria[] = "Target Location: {$config['location']}";
-				}
-				if ( ! empty( $config['company_size'] ) ) {
-					$criteria[] = "Company Size: {$config['company_size']}";
-				}
-				if ( ! empty( $config['keyword'] ) ) {
-					$criteria[] = "Keywords / Focus: {$config['keyword']}";
-				}
+			// Call B2bScraperService::discover_leads with current_page and exclusions
+			$discovery = B2bScraperService::discover_leads(
+				$config,
+				$current_page,
+				$batch_limit,
+				array_keys( $seen_domains )
+			);
 
-				$prompt_base = sprintf(
-					"Generate %d realistic, highly targeted B2B prospect profiles matching these criteria:\n%s\n",
-					$batch_limit,
-					implode( "\n", $criteria )
-				);
-			}
-
-			// Add exclusion constraints if we have already encountered domains in previous loops.
-			if ( ! empty( $seen_domains ) ) {
-				$sample_exclude = array_slice( array_unique( $seen_domains ), -15 );
-				$prompt_base   .= "\nDO NOT include any prospects from these domains:\n" . implode( ', ', $sample_exclude ) . "\n";
-			}
-
-			$full_prompt = $prompt_base .
-				"\nReturn ONLY a valid JSON object with a \"leads\" array conforming to this exact structure:\n" .
-				"{\n" .
-				"  \"leads\": [\n" .
-				"    {\n" .
-				"      \"first_name\": \"string\",\n" .
-				"      \"last_name\": \"string\",\n" .
-				"      \"company\": \"string\",\n" .
-				"      \"title\": \"string\",\n" .
-				"      \"domain\": \"string (valid company domain, e.g. acme-corp.com)\",\n" .
-				"      \"email\": \"string (valid corporate email e.g. first.last@domain)\",\n" .
-				"      \"location\": \"string (city/country)\",\n" .
-				"      \"website\": \"string (https://domain)\",\n" .
-				"      \"confidence\": \"string (e.g. 90%%)\"\n" .
-				"    }\n" .
-				"  ]\n" .
-				"}\n" .
-				"Important: Return ONLY the JSON object. Do not include markdown formatting, code fences, or explanations.";
-
-			$ai_res = \WPSpace\AiMarketingExpert\AiProvider::generate( $full_prompt, 'text', 6000, array( 'json_mode' => true ) );
-			if ( empty( $ai_res['success'] ) ) {
-				break;
-			}
-
-			$raw_json = (string) ( $ai_res['content'] ?? '' );
-			$parsed   = aime_parse_ai_json( $raw_json );
-			if ( ! is_array( $parsed ) ) {
-				$parsed = json_decode( $raw_json, true );
-			}
-			if ( isset( $parsed['leads'] ) && is_array( $parsed['leads'] ) ) {
-				$parsed = $parsed['leads'];
-			} elseif ( isset( $parsed['prospects'] ) && is_array( $parsed['prospects'] ) ) {
-				$parsed = $parsed['prospects'];
-			} elseif ( isset( $parsed['data'] ) && is_array( $parsed['data'] ) ) {
-				$parsed = $parsed['data'];
-			} elseif ( isset( $parsed['email'] ) ) {
-				$parsed = array( $parsed );
-			}
-
-			// Robust fallback: extract individual valid JSON objects if response was partially cut off or wrapped
-			if ( ! is_array( $parsed ) || empty( $parsed ) ) {
-				$recovered = array();
-				if ( preg_match_all( '/\{[^{}]*?"email"\s*:\s*"[^"]+?"[^{}]*?\}/s', $raw_json, $matches ) ) {
-					foreach ( $matches[0] as $match ) {
-						$item = json_decode( $match, true );
-						if ( is_array( $item ) && ! empty( $item['email'] ) ) {
-							$recovered[] = $item;
-						}
-					}
-				}
-				if ( ! empty( $recovered ) ) {
-					$parsed = $recovered;
-				}
-			}
-
-			if ( ! is_array( $parsed ) || empty( $parsed ) ) {
+			$leads = $discovery['items'] ?? array();
+			if ( empty( $leads ) ) {
+				// Try advancing page pointer even if empty, to avoid getting stuck on a dry page
+				$current_page = B2bScraperService::advance_autopilot_page_pointer( $config, $current_page );
 				continue;
 			}
 
-			foreach ( $parsed as $item ) {
+			foreach ( $leads as $item ) {
 				if ( $imported_count >= $daily_target ) {
 					break 2;
 				}
@@ -2493,12 +2324,17 @@ class SubscriberController {
 				$seen_domains[ $domain ] = true;
 
 				// 1. Live DNS MX Deliverability Verification.
-				if ( ! EmailValidator::has_mailable_domain( $domain ) ) {
+				if ( empty( $item['mx_verified'] ) && ! EmailValidator::has_mailable_domain( $domain ) ) {
 					$skipped_mx_count++;
 					continue;
 				}
 
 				// 2. Multi-tier CRM Deduplication Check (all statuses).
+				if ( ! empty( $item['is_in_crm'] ) || B2bScraperService::is_domain_in_crm( $domain ) ) {
+					$skipped_duplicates_count++;
+					continue;
+				}
+
 				$existing_id = (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$subscribers_table} WHERE email = %s", $email ) );
 				if ( $existing_id > 0 ) {
 					$skipped_duplicates_count++;
@@ -2542,6 +2378,9 @@ class SubscriberController {
 				if ( $website ) {
 					$meta['website'] = $website;
 				}
+				if ( ! empty( $item['phone'] ) ) {
+					$meta['phone'] = sanitize_text_field( $item['phone'] );
+				}
 				if ( ! empty( $meta ) ) {
 					$this->save_meta( $sub_id, $meta );
 				}
@@ -2560,6 +2399,9 @@ class SubscriberController {
 
 				$this->log_activity( $sub_id, 'created', 'Imported via B2B Lead Autopilot' );
 			}
+
+			// Advance page pointer for next batch or next scheduled day
+			$current_page = B2bScraperService::advance_autopilot_page_pointer( $config, $current_page );
 		}
 
 		// Update option with latest run metrics.
@@ -2569,6 +2411,7 @@ class SubscriberController {
 			'skipped_duplicates' => $skipped_duplicates_count,
 			'skipped_mx'         => $skipped_mx_count,
 			'status'             => 'completed',
+			'page_pointer'       => $current_page,
 			'timestamp'          => time(),
 		);
 		$config['total_imported']     = ( $config['total_imported'] ?? 0 ) + $imported_count;
@@ -2582,6 +2425,7 @@ class SubscriberController {
 			'skipped_duplicates' => $skipped_duplicates_count,
 			'skipped_mx'         => $skipped_mx_count,
 			'target'             => $daily_target,
+			'page_pointer'       => $current_page,
 			'timestamp'          => $now,
 		);
 	}

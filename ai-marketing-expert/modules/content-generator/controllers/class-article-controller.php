@@ -279,6 +279,10 @@ class ArticleController {
 			'featured_image_id'  => absint( $request->get_param( 'featured_image_id' ) ) ?: null,
 			'preset_id'         => absint( $request->get_param( 'preset_id' ) ) ?: null,
 			'brand_voice_id'    => aime_has_pro() ? ( absint( $request->get_param( 'brand_voice_id' ) ) ?: null ) : null,
+			'meta_title'        => sanitize_text_field( $request->get_param( 'meta_title' ) ?: '' ),
+			'meta_description'  => sanitize_textarea_field( $request->get_param( 'meta_description' ) ?: '' ),
+			'seo_score'         => absint( $request->get_param( 'seo_score' ) ?: 0 ),
+			'readability_score' => absint( $request->get_param( 'readability_score' ) ?: 0 ),
 			'created_at'        => $now,
 			'updated_at'        => $now,
 		);
@@ -360,7 +364,7 @@ class ArticleController {
 		if ( $request->has_param( 'content' ) ) {
 			$content               = self::clean_content( $request->get_param( 'content' ) );
 			$data['content']       = $content;
-			$data['actual_word_count'] = str_word_count( wp_strip_all_tags( $content ) );
+			$data['actual_word_count'] = function_exists( 'aime_count_words' ) ? aime_count_words( $content ) : str_word_count( wp_strip_all_tags( $content ) );
 		}
 
 		if ( $request->has_param( 'excerpt' ) ) {

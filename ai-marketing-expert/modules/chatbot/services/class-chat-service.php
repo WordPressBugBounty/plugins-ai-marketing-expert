@@ -68,8 +68,10 @@ class ChatService {
 		$ai_content = trim( aime_strip_thinking_text( $ai_result['content'], 'text' ) );
 
 		// 5. Parse action intents from AI response.
-		$actions    = $this->parse_actions( $ai_content );
-		$ai_content = $this->strip_action_tags( $ai_content );
+		$global_settings = get_option( 'aime_chatbot_settings', array() );
+		$enable_buy_now  = ! empty( $global_settings['enable_buy_now_link'] );
+		$actions         = $this->parse_actions( $ai_content, $enable_buy_now );
+		$ai_content      = $this->strip_action_tags( $ai_content );
 
 		// Never store/show an empty bubble. If the model replied with only an
 		// action tag, substitute a short lead-in; with no actions either, treat
@@ -127,6 +129,8 @@ class ChatService {
 
 	private function build_prompt( object $conversation, array $history, string $visitor_message, array $knowledge ): string {
 		$parts = array();
+		$global_settings  = get_option( 'aime_chatbot_settings', array() );
+		$enable_buy_now   = ! empty( $global_settings['enable_buy_now_link'] );
 		$knowledge_config = json_decode( $conversation->knowledge_config ?? '{}', true ) ?: array();
 
 		// System instructions.
@@ -165,7 +169,7 @@ class ChatService {
 				if ( 'qa_pair' === $entry->type && ! empty( $entry->question ) ) {
 					$parts[] = sprintf( "Q: %s\nA: %s", $entry->question, $entry->answer );
 				} elseif ( 'woo_product' === $entry->type ) {
-					$product_context = $this->format_product_knowledge_entry( $entry );
+					$product_context = $this->format_product_knowledge_entry( $entry, $enable_buy_now );
 					if ( $product_context ) {
 						$parts[] = $product_context;
 					}
@@ -199,10 +203,14 @@ class ChatService {
 
 		$parts[] = $this->build_response_style_instructions( $knowledge_config );
 
+		$product_link_instruction = $enable_buy_now
+			? "When recommending or describing products, include Product page, Add to cart, or Buy now links when those links are present in the product knowledge. "
+			: "When recommending or describing products, always provide Product page links (e.g. [Product Page](url)) so visitors can view full details, options, and purchase. Do not generate direct Buy Now or checkout links. ";
+
 		$parts[] = "\nRespond helpfully and concisely. Use the knowledge base as the preferred source when it contains relevant information. "
 				. "When knowledge-base data is relevant, answer confidently and naturally from that data instead of apologizing or saying it is unavailable. "
 				. "For product questions, carefully match product names, SKUs, categories, prices, descriptions, and product metadata in the knowledge base before deciding the information is missing. "
-				. "When recommending or describing products, include Product page, Add to cart, or Buy now links when those links are present in the product knowledge. "
+				. $product_link_instruction
 				. "Keep any AI-generated suggestions, assumptions, or extra notes separate at the bottom under 'Additional note:' so the main answer stays grounded in the knowledge base. "
 				. "If the knowledge base does not cover a common or general topic, answer using reliable general knowledge and avoid saying you lack knowledge-base information. "
 				. "Only say you do not have enough information when the question asks for specific details about this business, website, product, order, account, pricing, policy, availability, or other private/local information that is not in the knowledge base. "
@@ -320,7 +328,7 @@ class ChatService {
 		return array_values( array_unique( $words ) );
 	}
 
-	private function format_product_knowledge_entry( object $entry ): string {
+	private function format_product_knowledge_entry( object $entry, bool $enable_buy_now = false ): string {
 		$metadata   = json_decode( $entry->metadata ?? '{}', true ) ?: array();
 		$product_id = absint( $entry->source_id ?? 0 );
 		$title      = sanitize_text_field( $metadata['title'] ?? '' );
@@ -345,11 +353,13 @@ class ChatService {
 		if ( $url ) {
 			$lines[] = 'Product page link: ' . $url;
 		}
-		if ( $cart_url ) {
-			$lines[] = 'Add to cart link: ' . esc_url_raw( $cart_url );
-		}
-		if ( $buy_url ) {
-			$lines[] = 'Buy now link: ' . esc_url_raw( $buy_url );
+		if ( $enable_buy_now ) {
+			if ( $cart_url ) {
+				$lines[] = 'Add to cart link: ' . esc_url_raw( $cart_url );
+			}
+			if ( $buy_url ) {
+				$lines[] = 'Buy now link: ' . esc_url_raw( $buy_url );
+			}
 		}
 		if ( $product_id ) {
 			$lines[] = 'Use [PRODUCT:' . $product_id . '] only when this exact product is recommended.';
@@ -395,7 +405,7 @@ class ChatService {
 
 	/* ── Parse action intents from AI response ───────── */
 
-	private function parse_actions( string $content ): array {
+	private function parse_actions( string $content, bool $enable_buy_now = false ): array {
 		$actions = array();
 
 		if ( false !== strpos( $content, '[LEAD_CAPTURE]' ) ) {
@@ -409,7 +419,7 @@ class ChatService {
 		// Product recommendation: [PRODUCT:42]
 		if ( preg_match_all( '/\[PRODUCT:(\d+)\]/', $content, $matches ) ) {
 			foreach ( array_unique( $matches[1] ) as $product_id ) {
-				$product = $this->hydrate_product_action( (int) $product_id );
+				$product = $this->hydrate_product_action( (int) $product_id, $enable_buy_now );
 				if ( $product ) {
 					$actions[] = $product;
 				}
@@ -421,13 +431,14 @@ class ChatService {
 
 	/**
 	 * Build a product action payload with everything the widget needs to
-	 * render a product card: title, price, image, product page link, and a
-	 * Buy Now (add-to-cart → checkout) link.
+	 * render a product card: title, price, image, product page link, and an
+	 * optional Buy Now link when enabled.
 	 *
-	 * @param int $product_id Product post ID.
+	 * @param int  $product_id     Product post ID.
+	 * @param bool $enable_buy_now Whether direct checkout/buy now links are enabled.
 	 * @return array|null Null when the ID doesn't resolve to a published product.
 	 */
-	private function hydrate_product_action( int $product_id ): ?array {
+	private function hydrate_product_action( int $product_id, bool $enable_buy_now = false ): ?array {
 		$post = get_post( $product_id );
 		if ( ! $post || 'publish' !== $post->post_status ) {
 			return null;
@@ -453,14 +464,17 @@ class ChatService {
 			$action['url']        = $product->get_permalink();
 			$action['price_html'] = wp_strip_all_tags( wc_price( (float) $product->get_price() ) );
 
-			// Buy Now: add to cart and jump straight to checkout. Variable
-			// products need option selection, so link to the product page.
-			if ( $product->is_type( 'simple' ) && $product->is_purchasable() && $product->is_in_stock() ) {
-				$action['buy_url'] = add_query_arg( 'add-to-cart', $product_id, wc_get_checkout_url() );
+			// Buy Now: add to cart and jump straight to checkout when enabled.
+			if ( $enable_buy_now ) {
+				if ( $product->is_type( 'simple' ) && $product->is_purchasable() && $product->is_in_stock() ) {
+					$action['buy_url'] = add_query_arg( 'add-to-cart', $product_id, wc_get_checkout_url() );
+				} else {
+					$action['buy_url'] = $product->get_permalink();
+				}
 			} else {
-				$action['buy_url'] = $product->get_permalink();
+				$action['buy_url'] = '';
 			}
-		} else {
+		} elseif ( $enable_buy_now ) {
 			// Non-Woo fallback: Buy Now just opens the product/page link.
 			$action['buy_url'] = $action['url'];
 		}

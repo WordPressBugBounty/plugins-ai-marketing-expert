@@ -98,7 +98,26 @@ class GenerateController {
 			$inline_images = 0;
 		}
 
-		$result = $this->generator->generate_article( $topic, $keywords, $tone, $word_count, $language, $outline, $preset, $include_table_of_contents, $inline_images );
+		$include_quick_answer = $request->get_param( 'include_quick_answer' );
+		$include_quick_answer = null === $include_quick_answer ? true : (bool) $include_quick_answer;
+
+		$include_faq = $request->get_param( 'include_faq' );
+		$include_faq = null === $include_faq ? true : (bool) $include_faq;
+
+		$result = $this->generator->generate_article(
+			$topic,
+			$keywords,
+			$tone,
+			$word_count,
+			$language,
+			$outline,
+			$preset,
+			$include_table_of_contents,
+			$inline_images,
+			0,
+			$include_quick_answer,
+			$include_faq
+		);
 
 		if ( ! $result['success'] ) {
 			return new \WP_REST_Response( array(
@@ -124,20 +143,35 @@ class GenerateController {
 		// Swap AI image placeholders for stock photos (fail-soft; also strips
 		// any leftover placeholders when the feature is off).
 		$stock_service = new \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService();
-		$article_body  = $stock_service->embed_inline_images( $article_body, $inline_images, $topic );
+		$article_body  = $stock_service->embed_inline_images( (string) $article_body, $inline_images, $topic );
+		if ( empty( $keywords ) && ! empty( $generated['focus_keyword'] ) ) {
+			$keywords = array( sanitize_text_field( (string) $generated['focus_keyword'] ) );
+		}
+
+		// Load automation settings.
+		$settings     = get_option( 'aime_content-generator_settings', array() );
+		$auto_meta    = aime_has_pro() ? ( $settings['auto_generate_meta']    ?? true ) : false;
+		$auto_excerpt = aime_has_pro() ? ( $settings['auto_generate_excerpt'] ?? true ) : false;
+		$auto_seo     = aime_has_pro() ? ( $settings['auto_seo_optimize']     ?? true ) : false;
+
+		$initial_meta_title = $auto_meta ? sanitize_text_field( $article_title ) : '';
+		$initial_meta_desc  = $auto_meta ? sanitize_textarea_field( $excerpt ) : '';
+		$initial_excerpt    = $auto_excerpt ? sanitize_textarea_field( $excerpt ) : '';
 
 		$inserted = $wpdb->insert( "{$p}aime_content_articles", array(
 			'title'             => sanitize_text_field( $article_title ),
 			'slug'              => sanitize_title( $article_title ),
 			'content'           => aime_kses_article( $article_body ),
-			'excerpt'           => sanitize_textarea_field( $excerpt ),
+			'excerpt'           => $initial_excerpt,
 			'status'            => 'ready',
 			'post_type'         => $post_type,
 			'topic'             => $topic,
 			'keywords'          => wp_json_encode( $keywords ),
 			'tone'              => $tone,
 			'word_count_target' => $word_count,
-			'actual_word_count' => str_word_count( wp_strip_all_tags( $article_body ) ),
+			'actual_word_count' => function_exists( 'aime_count_words' ) ? aime_count_words( $article_body ) : str_word_count( wp_strip_all_tags( $article_body ) ),
+			'meta_title'        => $initial_meta_title,
+			'meta_description'  => $initial_meta_desc,
 			'language'          => $language,
 			'ai_provider'       => $result['provider'] ?? '',
 			'ai_model'          => $result['model'] ?? '',
@@ -162,13 +196,7 @@ class GenerateController {
 		$article_id = (int) $wpdb->insert_id;
 		WorkflowController::save_article_version( $article_id, 'Generated' );
 
-		// Load automation settings.
-		$settings = get_option( 'aime_content-generator_settings', array() );
-		$auto_meta    = aime_has_pro() ? ( $settings['auto_generate_meta']    ?? true ) : false;
-		$auto_excerpt = aime_has_pro() ? ( $settings['auto_generate_excerpt'] ?? true ) : false;
-		$auto_seo     = aime_has_pro() ? ( $settings['auto_seo_optimize']     ?? true ) : false;
-
-		// Auto-generate meta title + description.
+		// Auto-generate meta title + description (if enabled in automation settings).
 		if ( $auto_meta ) {
 			try {
 				$meta_result = $this->generator->generate_meta(
@@ -232,16 +260,14 @@ class GenerateController {
 				'providers' => $result['providers'] ?? array(),
 				'continued' => (int) ( $result['continued'] ?? 0 ),
 				'partial'   => ! empty( $result['truncated'] ),
-				'words'     => str_word_count( wp_strip_all_tags( $article_body ) ),
+				'words'     => function_exists( 'aime_count_words' ) ? aime_count_words( $article_body ) : str_word_count( wp_strip_all_tags( $article_body ) ),
 			) ),
 			'created_at' => $now,
 		) );
 
-		// Auto SEO score.
-		if ( $auto_seo ) {
-			$seo = new SeoAnalyzerService();
-			$seo->quick_score( $article_id );
-		}
+		// Auto SEO score: calculate baseline quick score so article has accurate initial SEO metrics.
+		$seo = new SeoAnalyzerService();
+		$seo->quick_score( $article_id );
 
 		$article = $wpdb->get_row( $wpdb->prepare( "SELECT * FROM {$p}aime_content_articles WHERE id = %d", $article_id ) );
 
@@ -331,6 +357,11 @@ class GenerateController {
 		$content     = aime_kses_article( $request->get_param( 'content' ) );
 		$instruction = sanitize_text_field( $request->get_param( 'instruction' ) );
 		$tone        = sanitize_text_field( $request->get_param( 'tone' ) ?: 'professional' );
+		$article_id  = absint( $request->get_param( 'article_id' ) );
+
+		if ( $article_id > 0 ) {
+			WorkflowController::save_article_version( $article_id, __( 'Before Humanize', 'ai-marketing-expert' ) );
+		}
 
 		$result = $this->generator->improve_content( $content, $instruction, $tone );
 
@@ -344,15 +375,35 @@ class GenerateController {
 	/* ── SEO OPTIMIZE ────────────────────────────────── */
 
 	public function seo_optimize( \WP_REST_Request $request ): \WP_REST_Response {
-		$content  = aime_kses_article( $request->get_param( 'content' ) );
-		$keywords = array_map( 'sanitize_text_field', $request->get_param( 'keywords' ) ?: array() );
-		$title    = sanitize_text_field( $request->get_param( 'title' ) ?: '' );
+		$content    = aime_kses_article( $request->get_param( 'content' ) );
+		$keywords   = array_map( 'sanitize_text_field', $request->get_param( 'keywords' ) ?: array() );
+		$title      = sanitize_text_field( $request->get_param( 'title' ) ?: '' );
+		$article_id = absint( $request->get_param( 'article_id' ) );
 
 		$seo    = new SeoAnalyzerService();
 		$result = $seo->analyze_and_optimize( $content, $keywords, $title );
 
 		if ( ! $result['success'] ) {
 			return new \WP_REST_Response( array( 'message' => __( 'AI analysis failed.', 'ai-marketing-expert' ) ), 500 );
+		}
+
+		if ( $article_id > 0 && ! empty( $result['analysis'] ) && is_array( $result['analysis'] ) ) {
+			global $wpdb;
+			$update = array();
+			if ( isset( $result['analysis']['seo_score'] ) ) {
+				$update['seo_score'] = absint( $result['analysis']['seo_score'] );
+			}
+			if ( isset( $result['analysis']['readability_score'] ) ) {
+				$update['readability_score'] = absint( $result['analysis']['readability_score'] );
+			}
+			if ( ! empty( $update ) ) {
+				$update['updated_at'] = current_time( 'mysql', true );
+				$wpdb->update(
+					$wpdb->prefix . 'aime_content_articles',
+					$update,
+					array( 'id' => $article_id )
+				);
+			}
 		}
 
 		return new \WP_REST_Response( $result );

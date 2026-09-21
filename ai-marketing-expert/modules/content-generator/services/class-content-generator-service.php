@@ -26,7 +26,7 @@ class ContentGeneratorService {
 	 * @param int $word_count_max Optional upper bound. 0 = no explicit ceiling
 	 *                            (the model is simply asked not to pad past the floor).
 	 */
-	public function generate_article( string $topic, array $keywords, string $tone, int $word_count, string $language, string $outline = '', ?object $preset = null, bool $include_table_of_contents = false, int $inline_images = 0, int $word_count_max = 0 ): array {
+	public function generate_article( string $topic, array $keywords, string $tone, int $word_count, string $language, string $outline = '', ?object $preset = null, bool $include_table_of_contents = false, int $inline_images = 0, int $word_count_max = 0, bool $include_quick_answer = true, bool $include_faq = true ): array {
 		$system = $this->build_system_prompt( $tone, $language, $preset );
 
 		$keywords_str = $keywords ? implode( ', ', $keywords ) : 'none specified';
@@ -72,19 +72,24 @@ class ContentGeneratorService {
 		}
 
 		$prompt .= "Return a JSON object with these keys:\n"
-			. "- \"title\": a compelling SEO-friendly title that includes the primary keyword\n"
+			. "- \"title\": a compelling SEO-friendly title that includes the primary focus keyword near the beginning. If fitting naturally (e.g. listicles, step guides, tutorials, or year updates like 2026), include a number and power word, but prioritize human elegance and natural flow — NEVER force an awkward number.\n"
 			. "- \"body\": the full article in HTML format using h2, h3, p, ul, ol, li, strong, em tags\n"
-			. "- \"excerpt\": a 1-2 sentence summary (max 160 characters)\n"
+			. "- \"excerpt\": a compelling SEO meta description (130-155 characters) that naturally includes the primary focus keyword\n"
+			. "- \"focus_keyword\": the primary focus keyword (1-4 words) chosen for this post\n"
 			. "- \"tags\": array of 3-5 short topical tag names (1-3 words each, lowercase, no # symbols)\n"
 			. "- \"image_search\": a 2-4 word English stock-photo search query capturing the article's main visual theme (concrete nouns, no punctuation)\n"
 			. "- \"outline\": array of {heading, level} objects representing the article structure (level should be a number: 2 or 3)\n"
+			. ( $include_faq ? "- \"faqs\": array of {\"question\": \"...\", \"answer\": \"...\"} with 3-4 high-intent Q&As matching the FAQ section\n" : "" )
 			. "Return ONLY the JSON object. No thinking, no reasoning, no commentary, no explanation before or after the JSON.\n"
 			. "The body must be valid HTML.\n"
-			. "BODY STRUCTURE (critical): do NOT repeat the title as the first heading — the theme already renders the title as H1. "
-			. "Start the body with an intro <p> paragraph, then use H2 section headings that DIFFER from the title. "
-			. "Never use <h1> inside the body.\n"
-			. "KEYWORD REQUIREMENTS: The target keywords MUST appear naturally in the title, in headings (h2/h3), and throughout the body text. "
-			. "Use the primary keyword in the first paragraph and aim for 0.5-2%% keyword density.\n"
+			. "BODY STRUCTURE & MODERN SEO/GEO (critical):\n"
+			. "- Do NOT repeat the title as the first heading — the theme already renders the title as H1. Never use <h1> inside the body.\n"
+			. "- Start the body with an engaging intro <p> paragraph that introduces the primary keyword in the first 100 words.\n"
+			. ( $include_quick_answer ? "- Direct Answer Callout: After the intro paragraph, add a concise direct answer / key takeaways box for AI search engines: <div class=\"aime-quick-answer\"><strong>Key Takeaways:</strong> 2-3 concise summary bullet points answering the primary search intent.</div>\n" : "" )
+			. "- Use clear H2 and H3 section headings that DIFFER from the title. At least one main H2 or H3 heading MUST naturally include the primary focus keyword.\n"
+			. "- Structure: Keep paragraphs short (2-4 sentences max) for great mobile readability. Use comparison tables, bullet lists, or bold text where appropriate.\n"
+			. ( $include_faq ? "- FAQ Section (GEO / Answer Engine Optimization): Near the end before conclusion, include an FAQ section: <h2>Frequently Asked Questions</h2> with 3-4 high-intent questions (<h3 class=\"aime-faq-q\">Question?</h3><p class=\"aime-faq-a\">Concise, authoritative answer.</p>).\n" : "" )
+			. "KEYWORD REQUIREMENTS: The target keywords MUST appear naturally in the title, in at least one subheading (h2/h3), in the first paragraph, and throughout the body text (aim for 0.8-1.8% keyword density — never keyword stuff).\n"
 			. "IMPORTANT: Write ALL content in full. Do NOT use placeholders like \"...\", \"[content]\", or ellipsis. Every section must contain complete, detailed text.";
 
 		// Token budget is sized off the ceiling, not the floor, and uses ~3.5
@@ -518,28 +523,28 @@ class ContentGeneratorService {
 	/* ── IMPROVE content ─────────────────────────────── */
 
 	public function improve_content( string $content, string $instruction, string $tone ): array {
-		// Swap media (images, figures, embeds) for placeholders so the AI cannot
-		// rewrite or drop them while rephrasing the surrounding prose.
-		$media     = array();
-		$protected = self::protect_media( $content, $media );
+		// Protect structural elements (TOC, Quick Answer, FAQ, Media) so the AI cannot
+		// strip or distort them while rephrasing the surrounding prose.
+		$placeholders = array();
+		$protected    = self::protect_blocks( $content, $placeholders );
 
 		$word_count = str_word_count( wp_strip_all_tags( $protected ) );
 		$max_tokens = min( 16384, max( 2048, (int) ( $word_count * 2.5 ) ) );
 
-		$prompt = "You are a professional editor. Improve the following content based on this instruction.\n\n"
+		$prompt = "You are a professional editor and humanizer. Improve the following content based on this instruction.\n\n"
 			. "Instruction: {$instruction}\n"
 			. "Tone: {$tone}\n\n"
 			. "Original content:\n{$protected}\n\n"
-			. "IMPORTANT: The original content has approximately {$word_count} words. "
-			. "Your output MUST have approximately the same word count. Do NOT shorten, truncate, or remove any sections. "
-			. "Return the improved content in HTML format using p, h2, h3, ul, ol, li, strong, em tags. ";
+			. "CRITICAL REQUIREMENTS:\n"
+			. "1. PRESERVE THE ENTIRE ARTICLE FROM THE VERY BEGINNING: You MUST keep all opening introductory paragraphs, lead-in text, hooks, and opening headings that appear before the first image or heading. Do NOT skip, delete, or discard the introduction. Start your output with the very first introductory paragraph from the original content.\n"
+			. "2. PRESERVE ALL SECTIONS & WORD COUNT: The original content has approximately {$word_count} words. Your output MUST have approximately the same word count. Do NOT shorten, truncate, or remove any sections.\n"
+			. "3. HTML TAGS: Return the improved content in clean HTML format using p, h2, h3, h4, ul, ol, li, strong, em, a, blockquote tags. Keep all anchor links and formatting intact.\n";
 
-		if ( $media ) {
-			$prompt .= "The content contains placeholder markers such as [[AIME_MEDIA_0]]. "
-				. "These represent images and embeds. You MUST copy every placeholder into your output "
-				. "exactly as written, character for character, keeping them in the same order and at the "
-				. "same position relative to the surrounding paragraphs. Never delete, rename, translate, "
-				. "or wrap them in other tags. ";
+		if ( ! empty( $placeholders ) ) {
+			$prompt .= "4. PRESERVE ALL PLACEHOLDER TAGS: The content contains protected placeholder markers such as [[AIME_TOC_0]], [[AIME_QUICK_ANSWER_0]], [[AIME_MEDIA_0]], etc. "
+				. "These represent navigation menus, key takeaway callouts, images, and embedded widgets. "
+				. "You MUST copy EVERY SINGLE placeholder tag into your output EXACTLY as written, character for character, keeping them in their EXACT relative positions between paragraphs. "
+				. "Never delete, rename, translate, or omit any placeholder tag.\n";
 		}
 
 		$prompt .= "Return ONLY the improved HTML content. Do NOT include any thinking, reasoning, planning, or commentary — "
@@ -555,66 +560,112 @@ class ContentGeneratorService {
 
 		return array(
 			'success' => true,
-			'content' => self::restore_media( $improved, $media ),
+			'content' => self::restore_blocks( $improved, $placeholders, $content ),
 		);
 	}
 
 	/**
-	 * Replace media nodes with opaque placeholders.
+	 * Protect structural elements (TOC, Quick Answer, FAQ, Media) with placeholder tokens.
 	 *
 	 * @param string $content Source HTML.
-	 * @param array  $media   Filled with token => original HTML.
-	 * @return string HTML with media replaced by tokens.
+	 * @param array  $placeholders Map of token => array( 'html' => string, 'type' => string ).
+	 * @return string Content with structural elements replaced by tokens.
 	 */
-	private static function protect_media( string $content, array &$media ): string {
-		$media   = array();
-		$pattern = '/<figure\b[^>]*>.*?<\/figure>'
+	private static function protect_blocks( string $content, array &$placeholders ): string {
+		$placeholders = array();
+
+		// 1. Protect Table of Contents (<nav class="aime-article-toc">...</nav> or any <nav>)
+		$content = preg_replace_callback(
+			'/<nav\b[^>]*>.*?<\/nav>/is',
+			function ( $m ) use ( &$placeholders ) {
+				$token = '[[AIME_TOC_' . count( $placeholders ) . ']]';
+				$placeholders[ $token ] = array(
+					'html' => $m[0],
+					'type' => 'toc',
+				);
+				return "\n" . $token . "\n";
+			},
+			$content
+		);
+
+		// 2. Protect Quick Answer / Key Takeaways (<div class="aime-quick-answer">...</div>)
+		$content = preg_replace_callback(
+			'/<div\b[^>]*class=["\'][^"\']*aime-quick-answer[^"\']*["\'][^>]*>.*?<\/div>/is',
+			function ( $m ) use ( &$placeholders ) {
+				$token = '[[AIME_QUICK_ANSWER_' . count( $placeholders ) . ']]';
+				$placeholders[ $token ] = array(
+					'html' => $m[0],
+					'type' => 'quick_answer',
+				);
+				return "\n" . $token . "\n";
+			},
+			$content
+		);
+
+		// 3. Protect FAQ Section (<div class="aime-faq-section">...</div> or <div class="aime-faq...">)
+		$content = preg_replace_callback(
+			'/<div\b[^>]*class=["\'][^"\']*aime-faq[^"\']*["\'][^>]*>.*?<\/div>/is',
+			function ( $m ) use ( &$placeholders ) {
+				$token = '[[AIME_FAQ_' . count( $placeholders ) . ']]';
+				$placeholders[ $token ] = array(
+					'html' => $m[0],
+					'type' => 'faq',
+				);
+				return "\n" . $token . "\n";
+			},
+			$content
+		);
+
+		// 4. Protect Media nodes (figure, picture, iframe, video, audio, img)
+		$media_pattern = '/<figure\b[^>]*>.*?<\/figure>'
 			. '|<picture\b[^>]*>.*?<\/picture>'
 			. '|<iframe\b[^>]*>.*?<\/iframe>'
 			. '|<video\b[^>]*>.*?<\/video>'
 			. '|<audio\b[^>]*>.*?<\/audio>'
 			. '|<img\b[^>]*\/?>/is';
 
-		$replaced = preg_replace_callback(
-			$pattern,
-			function ( $m ) use ( &$media ) {
-				$token           = '[[AIME_MEDIA_' . count( $media ) . ']]';
-				$media[ $token ] = $m[0];
-				return $token;
+		$content = preg_replace_callback(
+			$media_pattern,
+			function ( $m ) use ( &$placeholders ) {
+				$token = '[[AIME_MEDIA_' . count( $placeholders ) . ']]';
+				$placeholders[ $token ] = array(
+					'html' => $m[0],
+					'type' => 'media',
+				);
+				return "\n" . $token . "\n";
 			},
 			$content
 		);
 
-		// preg_replace_callback returns null on failure (e.g. backtrack limit) —
-		// fall back to the untouched content rather than losing the article.
-		if ( null === $replaced ) {
-			$media = array();
+		if ( null === $content ) {
+			$placeholders = array();
 			return $content;
 		}
 
-		return $replaced;
+		return $content;
 	}
 
 	/**
-	 * Put protected media back into AI output.
+	 * Restore protected structural elements and media from placeholders.
 	 *
-	 * Any placeholder the model dropped is re-appended at the end so images
-	 * are never silently lost.
-	 *
-	 * @param string $content AI output containing tokens.
-	 * @param array  $media   Token => original HTML map.
+	 * @param string $content Output from AI.
+	 * @param array  $placeholders Token => array( 'html' => string, 'type' => string ).
+	 * @param string $original_content Original HTML before improvement.
+	 * @return string Restored HTML.
 	 */
-	private static function restore_media( string $content, array $media ): string {
-		if ( ! $media ) {
+	private static function restore_blocks( string $content, array $placeholders, string $original_content = '' ): string {
+		if ( empty( $placeholders ) ) {
 			return $content;
 		}
 
 		$missing = array();
 
-		foreach ( $media as $token => $html ) {
-			// Tolerate the model wrapping a placeholder in its own paragraph.
-			$quoted  = preg_quote( $token, '/' );
-			$count   = 0;
+		foreach ( $placeholders as $token => $data ) {
+			$html   = is_array( $data ) ? ( $data['html'] ?? '' ) : (string) $data;
+			$type   = is_array( $data ) ? ( $data['type'] ?? 'media' ) : 'media';
+			$quoted = preg_quote( $token, '/' );
+			$count  = 0;
+
 			$content = preg_replace(
 				'/<p>\s*' . $quoted . '\s*<\/p>|' . $quoted . '/',
 				str_replace( '$', '\$', $html ),
@@ -624,15 +675,59 @@ class ContentGeneratorService {
 			);
 
 			if ( ! $count ) {
-				$missing[] = $html;
+				$missing[] = array(
+					'html' => $html,
+					'type' => $type,
+				);
 			}
 		}
 
-		if ( $missing ) {
-			$content .= "\n" . implode( "\n", $missing );
+		// Re-insert any placeholder accidentally dropped by the AI in intelligent locations.
+		if ( ! empty( $missing ) ) {
+			foreach ( $missing as $item ) {
+				$html = $item['html'];
+				$type = $item['type'];
+
+				if ( in_array( $type, array( 'toc', 'quick_answer' ), true ) ) {
+					// TOC and Quick Answer belong near the top (before first h2 or after first p).
+					if ( preg_match( '/<h2\b/i', $content, $m, PREG_OFFSET_CAPTURE ) ) {
+						$pos     = $m[0][1];
+						$content = substr( $content, 0, $pos ) . $html . "\n\n" . substr( $content, $pos );
+					} else {
+						$content = $html . "\n\n" . $content;
+					}
+				} elseif ( 'faq' === $type ) {
+					$content .= "\n\n" . $html;
+				} else {
+					$content .= "\n\n" . $html;
+				}
+			}
+		}
+
+		// Emergency safety check: Did the AI model discard the intro paragraphs before the first heading/image?
+		if ( '' !== $original_content ) {
+			// Extract intro paragraphs before the first h2, figure, or table of contents
+			if ( preg_match( '/^(?:\s*<p\b[^>]*>.*?<\/p>\s*)+/is', $original_content, $orig_intro ) ) {
+				$intro_html = trim( $orig_intro[0] );
+				// If the improved content starts immediately with an h2, figure, or nav, the intro was dropped
+				if ( ! empty( $intro_html ) && preg_match( '/^\s*<(?:h[1-6]|figure|img|nav)\b/i', trim( $content ) ) ) {
+					$content = $intro_html . "\n\n" . $content;
+				}
+			}
 		}
 
 		return $content;
+	}
+
+	/**
+	 * Backwards-compatible aliases for protect_media and restore_media.
+	 */
+	private static function protect_media( string $content, array &$media ): string {
+		return self::protect_blocks( $content, $media );
+	}
+
+	private static function restore_media( string $content, array $media ): string {
+		return self::restore_blocks( $content, $media );
 	}
 
 	/* ── GENERATE meta title & description ───────────── */

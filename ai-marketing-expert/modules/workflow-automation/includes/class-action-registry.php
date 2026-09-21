@@ -147,7 +147,9 @@ class ActionRegistry {
 						break;
 					case 'parent_not':
 					case 'parent_is':
-						// Parent-dependent: leave the rule in place for the builder.
+					case 'config_is':
+					case 'config_not':
+						// Parent or config-dependent: leave the rule in place for the builder.
 						break;
 					default:
 						unset( $field['visible_rule'] );

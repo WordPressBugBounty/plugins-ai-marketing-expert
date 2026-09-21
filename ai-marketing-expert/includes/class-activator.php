@@ -66,6 +66,7 @@ class Activator {
 			'batch_size'       => 50,
 			'batch_interval'   => 60,             // seconds between batches
 			'gdpr_enabled'     => true,
+			'woo_cart_cutoff_minutes' => 30,
 		);
 
 		$existing = get_option( 'aime_settings', array() );

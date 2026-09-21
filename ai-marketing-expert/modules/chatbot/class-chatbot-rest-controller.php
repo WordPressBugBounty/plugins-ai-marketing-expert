@@ -140,6 +140,13 @@ class ChatbotRestController {
 			'permission_callback' => array( $this, 'admin_permission' ),
 		) );
 
+		// POST /chatbot/leads/sync-subscribers
+		register_rest_route( $this->ns, '/chatbot/leads/sync-subscribers', array(
+			'methods'             => 'POST',
+			'callback'            => array( $c, 'sync_leads_to_subscribers' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+		) );
+
 		// GET /chatbot/conversations/{id}
 		register_rest_route( $this->ns, '/chatbot/conversations/(?P<id>\d+)', array(
 			'methods'             => 'GET',

@@ -76,6 +76,7 @@ class EmailMarketingModule extends Module {
 		add_action( 'aime_link_clicked', array( $this, 'fire_link_clicked_trigger' ), 10, 3 );
 		add_action( 'user_register', array( $this, 'fire_user_registered_trigger' ), 10, 1 );
 		add_action( 'woocommerce_order_status_completed', array( $this, 'fire_woocommerce_order_completed_trigger' ), 10, 1 );
+		add_action( 'aime_chatbot_lead_captured', array( $this, 'handle_chatbot_lead_captured' ), 10, 1 );
 	}
 
 	/* ── Automation trigger wiring ───────────────────────── */
@@ -184,6 +185,65 @@ class EmailMarketingModule extends Module {
 		}
 		global $wpdb;
 		return (int) $wpdb->get_var( $wpdb->prepare( "SELECT id FROM {$wpdb->prefix}aime_subscribers WHERE email = %s LIMIT 1", sanitize_email( $email ) ) );
+	}
+
+	/**
+	 * Automatically create or sync a subscriber when a lead is captured by the chatbot.
+	 *
+	 * @param array $lead_data Captured lead data (email, first_name, phone, source, etc.).
+	 */
+	public function handle_chatbot_lead_captured( array $lead_data ): void {
+		$email = sanitize_email( $lead_data['email'] ?? '' );
+		if ( ! is_email( $email ) ) {
+			return;
+		}
+
+		global $wpdb;
+		$table = $wpdb->prefix . 'aime_subscribers';
+
+		$subscriber_id = $this->find_subscriber_id_by_email( $email );
+		$now           = current_time( 'mysql' );
+
+		if ( ! $subscriber_id ) {
+			$raw_name   = $lead_data['first_name'] ?? $lead_data['name'] ?? '';
+			$name_parts = explode( ' ', trim( (string) $raw_name ), 2 );
+			$first_name = sanitize_text_field( $name_parts[0] ?? '' );
+			$last_name  = sanitize_text_field( $name_parts[1] ?? ( $lead_data['last_name'] ?? '' ) );
+			$phone      = sanitize_text_field( $lead_data['phone'] ?? '' );
+			$wpdb->insert(
+				$table,
+				array(
+					'hash'         => md5( $email . time() ),
+					'first_name'   => $first_name,
+					'last_name'    => $last_name,
+					'email'        => $email,
+					'phone'        => $phone,
+					'status'       => 'subscribed',
+					'contact_type' => 'lead',
+					'source'       => 'chatbot',
+					'created_at'   => $now,
+					'updated_at'   => $now,
+				)
+			);
+			$subscriber_id = (int) $wpdb->insert_id;
+
+			if ( $subscriber_id > 0 ) {
+				do_action( 'aime_subscriber_created', $subscriber_id, array(
+					'email'      => $email,
+					'first_name' => $first_name,
+					'source'     => 'chatbot',
+				) );
+			}
+		} else {
+			$wpdb->update(
+				$table,
+				array(
+					'last_activity' => $now,
+					'updated_at'    => $now,
+				),
+				array( 'id' => $subscriber_id )
+			);
+		}
 	}
 
 	/* ── REST routes ─────────────────────────────────────── */
@@ -528,6 +588,10 @@ class EmailMarketingModule extends Module {
 				break;
 			case 'confirm':
 				$this->front_confirm( $hash );
+				break;
+			case 'web_view':
+			case 'view':
+				$this->front_track_web_view( $hash, $token );
 				break;
 		}
 		// phpcs:enable WordPress.Security.NonceVerification.Recommended
@@ -927,6 +991,48 @@ class EmailMarketingModule extends Module {
 			__( '&#10003; Confirmed', 'ai-marketing-expert' ),
 			__( 'Your subscription has been confirmed! Thank you for subscribing.', 'ai-marketing-expert' )
 		);
+	}
+
+	/**
+	 * Web view: render email HTML in browser for the "View in browser" link.
+	 */
+	private function front_track_web_view( string $email_hash, string $token = '' ): void {
+		global $wpdb;
+		$p = $wpdb->prefix;
+
+		$email = null;
+		if ( $email_hash ) {
+			$email = $wpdb->get_row( $wpdb->prepare(
+				"SELECT id, campaign_id, subscriber_id, email_subject, email_body FROM {$p}aime_campaign_emails WHERE email_hash = %s LIMIT 1",
+				$email_hash
+			) );
+		}
+
+		if ( ! $email && $token ) {
+			$data = self::decode_tracking_hash( $token );
+			if ( $data ) {
+				$email = $wpdb->get_row( $wpdb->prepare(
+					"SELECT id, campaign_id, subscriber_id, email_subject, email_body FROM {$p}aime_campaign_emails WHERE campaign_id = %d AND subscriber_id = %d LIMIT 1",
+					(int) $data['campaign_id'],
+					(int) $data['subscriber_id']
+				) );
+			}
+		}
+
+		if ( ! $email || empty( $email->email_body ) ) {
+			wp_die( esc_html__( 'Email not found or expired.', 'ai-marketing-expert' ), esc_html__( 'View in Browser', 'ai-marketing-expert' ), array( 'response' => 404 ) );
+		}
+
+		// Also record an open event if not opened yet.
+		$wpdb->update( "{$p}aime_campaign_emails", array( 'is_open' => 1 ), array( 'id' => $email->id ) );
+
+		nocache_headers();
+		header( 'Content-Type: text/html; charset=UTF-8' );
+		header( 'X-Robots-Tag: noindex, nofollow' );
+
+		// phpcs:ignore WordPress.Security.EscapeOutput.OutputNotEscaped
+		echo $email->email_body;
+		exit;
 	}
 
 	private function serve_tracking_page( string $title, string $heading, string $message, string $extra_html = '' ): void {

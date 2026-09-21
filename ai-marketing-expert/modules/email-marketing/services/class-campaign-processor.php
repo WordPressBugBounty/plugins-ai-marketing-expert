@@ -495,7 +495,34 @@ class CampaignProcessor {
 			$headers[] = "Reply-To: {$reply_to}";
 		}
 
-		$sent = SmtpProvider::send_with_fallback( $email->email_address, $email->email_subject, $email->email_body, $headers );
+		$to_email = (string) ( $email->email_address ?? $email->to_email ?? '' );
+		if ( ! is_email( $to_email ) ) {
+			$wpdb->update(
+				$campaign_emails_table,
+				array(
+					'status'     => 'failed',
+					'note'       => __( 'Invalid recipient email address.', 'ai-marketing-expert' ),
+					'updated_at' => current_time( 'mysql', true ),
+				),
+				array( 'id' => $email->id )
+			);
+			return;
+		}
+
+		$subject = (string) ( $email->email_subject ?? '' );
+		if ( '' === trim( $subject ) ) {
+			$subject = __( '(No Subject)', 'ai-marketing-expert' );
+		}
+		$body = (string) ( $email->email_body ?? '' );
+
+		try {
+			$sent = SmtpProvider::send_with_fallback( $to_email, $subject, $body, $headers );
+		} catch ( \Throwable $e ) {
+			if ( function_exists( 'aime_log' ) ) {
+				aime_log( sprintf( "Campaign send exception for '%s': %s", $to_email, $e->getMessage() ), 'error' );
+			}
+			$sent = false;
+		}
 
 		if ( null === $sent ) {
 			// Every SMTP connection is at its daily limit. This is throttling, not a
@@ -855,6 +882,28 @@ class CampaignProcessor {
 		return add_query_arg(
 			array(
 				'aime_track' => 'unsubscribe',
+				'hash'       => $hash,
+			),
+			home_url()
+		);
+	}
+
+	private function get_web_view_url( object $email ): string {
+		global $wpdb;
+		$hash = ! empty( $email->email_hash ) ? (string) $email->email_hash : '';
+		if ( empty( $hash ) && ! empty( $email->id ) ) {
+			$hash = md5( (string) ( $email->campaign_id ?? 0 ) . '_' . (string) ( $email->subscriber_id ?? 0 ) . '_' . (string) $email->id . '_' . wp_generate_uuid4() );
+			$email->email_hash = $hash;
+			$p = $wpdb->prefix;
+			$wpdb->update(
+				"{$p}aime_campaign_emails",
+				array( 'email_hash' => $hash ),
+				array( 'id' => (int) $email->id )
+			);
+		}
+		return add_query_arg(
+			array(
+				'aime_track' => 'web_view',
 				'hash'       => $hash,
 			),
 			home_url()
