@@ -38,6 +38,7 @@ class AiController {
 		$platform = sanitize_text_field( $request->get_param( 'platform' ) ?: 'facebook' );
 		$topic    = sanitize_textarea_field( $request->get_param( 'topic' ) ?: '' );
 		$tone     = sanitize_text_field( $request->get_param( 'tone' ) ?: 'professional' );
+		$length   = sanitize_key( $request->get_param( 'length' ) ?: 'medium' );
 		$context  = sanitize_textarea_field( $request->get_param( 'context' ) ?: '' );
 
 		if ( empty( $topic ) ) {
@@ -45,7 +46,7 @@ class AiController {
 		}
 
 		$service = new AiSocialService();
-		$result  = $service->generate_caption( $platform, $topic, $tone, $context );
+		$result  = $service->generate_caption( $platform, $topic, $tone, $context, '', $length );
 
 		if ( ! $result['success'] ) {
 			return new \WP_REST_Response( array( 'message' => $result['error'] ), 500 );

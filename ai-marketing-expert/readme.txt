@@ -8,7 +8,7 @@ Stable tag: trunk
 License: GPLv2 or later
 License URI: https://www.gnu.org/licenses/gpl-2.0.html
 
-All-in-one AI marketing: Email campaigns, B2B lead finder, AI content generator, SEO analyzer, social scheduling, AI chatbot, workflow automation, and WooCommerce abandoned cart recovery.
+All-in-one AI marketing & workflow automation: Email campaigns, AI chatbot, B2B leads, AI content, SEO analyzer, social, and abandoned cart recovery.
 
 == Description ==
 
@@ -380,6 +380,14 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 
 == Changelog ==
 
+= 1.2.7 =
+* New: Free Stock Photos in Social Media Composer — Search and 1-click import high-resolution stock photos (Pexels and Pixabay) directly into social media posts and download them to your WordPress Media Library, making Instagram publishing and image posts effortless without needing paid AI image credits.
+* New: Universal Stock Photo Global Settings — Centralized Pexels and Pixabay API configurations under main Settings (Settings → Stock Photos) with encrypted API key storage (AES-256), accessible to all modules across the plugin.
+* Improved: 100% Backward Compatibility & Migration Notice — Preserved all existing saved stock keys from Content Generator automatically, and added an informative status card with a 1-click redirect button under Content Generator → Settings → Images for existing users.
+* New: Social Media Caption Length Selector — Added length controls (Short & Punchy 45–80 words, Standard / Engaging 110–190 words, Detailed / Storytelling 200–350 words) to tailor AI-generated copy for Instagram, Facebook, and LinkedIn.
+* Fixed: Instagram & Social Caption Truncation — Resolved an issue where AI-generated social captions were truncated to only the first line; the engine now delivers full, structured multi-paragraph captions with attention-grabbing hooks, clean line breaks, emojis, and strong calls-to-action.
+* Improved: Universal Stock Photo REST API — Enhanced core endpoints (/aime/v1/stock-images/search and /aime/v1/stock-images/import) to support flexible query parameters and safe sideloading with host whitelisting and SSRF protection.
+
 = 1.2.6 =
 * New: WooCommerce Abandoned Cart Recovery Engine — Real-time cart session tracking, guest checkout email capture via background AJAX, automated 15-minute cron inactivity detection, and encrypted 1-click cart restoration deep links directly to checkout.
 * New: WooCommerce Smart Cart Recovery & 3-Way Branching — 1-click single-quantity checkout deep links ({event.single_qty_url}), individual product recovery links ({event.single_item_links}), automated cart composition classification (single item, duplicate quantity, multiple items), and 3-way condition branching templates.
@@ -398,7 +406,7 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 * Improved: Facebook Publishing & Error #200 Hints — Explicit actionable guidance for Facebook permissions (pages_manage_posts, pages_read_engagement), Page Access Token detection, and separated Instagram validation.
 * New: AI Chatbot Safe Product Links & Configurable Buy Now — Product recommendations now default safely to direct product page permalinks to prevent empty cart errors on stores without cart AJAX endpoints, with an optional "Direct Checkout / Buy Now Link" toggle in bot settings for stores preferring direct checkout.
 * Improved: AI Chatbot Pro Branding — "Powered by AI Marketing Expert" footer dynamically links to the site's home URL for Pro users while retaining plugin branding on Free installations.
-* Fixed: Email Campaign Sending  Error
+* Fixed: Email Campaign Sending & 500 Error — Resolved a critical fatal error in the campaign queue processor where missing web-view helper caused campaigns to get stuck in "sending" state with HTTP 500.
 * New: Email Web-View Browser Display — Added dedicated web-view handler (?aime_track=web_view) allowing recipients to view rich email designs directly in their browser.
 * Improved: Email Sender Resilience — Added defensive parameter validation and error boundaries in campaign dispatcher so invalid recipient addresses or transient SMTP timeouts fail gracefully without stalling the entire batch.
 
@@ -494,6 +502,9 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 * React-based unified admin dashboard
 
 == Upgrade Notice ==
+
+= 1.2.7 =
+Feature Release: Free Stock Photos (Pexels & Pixabay) in Social Media Composer, Universal Stock Photo Global Settings, Caption Length Selector (short/medium/long), and fixed Instagram caption truncation for rich, engaging social posts. Highly recommended for all users.
 
 = 1.2.6 =
 Major Release: Smart WooCommerce Cart Recovery with 1-click single-qty checkout, Admin Dashboard Background Cron, Workflow Wait/Delay step, AI Text-to-Workflow Generator, Email Campaign processor resilience fix, and AI Chatbot product link safeguards. Recommended for all users.

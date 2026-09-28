@@ -138,6 +138,40 @@ class RestApi {
 			)
 		);
 
+		// GET /aime/v1/stock-images/search - Universal stock photo search (Pexels / Pixabay).
+		register_rest_route(
+			$namespace,
+			'/stock-images/search',
+			array(
+				'methods'             => \WP_REST_Server::READABLE,
+				'callback'            => array( $this, 'stock_images_search' ),
+				'permission_callback' => array( $this, 'admin_permission_check' ),
+				'args'                => array(
+					'query'       => array( 'type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field' ),
+					'q'           => array( 'type' => 'string', 'required' => false, 'sanitize_callback' => 'sanitize_text_field' ),
+					'page'        => array( 'type' => 'integer', 'default' => 1, 'sanitize_callback' => 'absint' ),
+					'per_page'    => array( 'type' => 'integer', 'default' => 12, 'sanitize_callback' => 'absint' ),
+					'orientation' => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_key' ),
+				),
+			)
+		);
+
+		// POST /aime/v1/stock-images/import - Sideload a stock image into the WP Media Library.
+		register_rest_route(
+			$namespace,
+			'/stock-images/import',
+			array(
+				'methods'             => \WP_REST_Server::CREATABLE,
+				'callback'            => array( $this, 'stock_images_import' ),
+				'permission_callback' => array( $this, 'admin_permission_check' ),
+				'args'                => array(
+					'url'        => array( 'type' => 'string', 'required' => true, 'sanitize_callback' => 'esc_url_raw' ),
+					'alt'        => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
+					'article_id' => array( 'type' => 'integer', 'default' => 0, 'sanitize_callback' => 'absint' ),
+				),
+			)
+		);
+
 		// GET /aime/v1/debug-log - Fetch plugin logs (only when WP_DEBUG is on).
 		register_rest_route(
 			$namespace,
@@ -768,6 +802,12 @@ class RestApi {
 			'has_password'         => ! empty( $imap_saved['password'] ),
 		);
 
+		// Universal Stock Photo configuration (Pexels / Pixabay).
+		$settings['stock_provider']  = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::get_provider();
+		$settings['has_pexels_key']  = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::is_configured( 'pexels' );
+		$settings['has_pixabay_key'] = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::is_configured( 'pixabay' );
+		unset( $settings['pexels_api_key'], $settings['pixabay_api_key'] );
+
 		return new \WP_REST_Response( array( 'settings' => $settings ) );
 	}
 
@@ -809,6 +849,41 @@ class RestApi {
 			}
 		}
 
+		// Stock Photo Provider & API Keys (synced across global and content-generator settings).
+		$cg_option_key = 'aime_content-generator_settings';
+		$cg_settings   = get_option( $cg_option_key, array() );
+		if ( ! is_array( $cg_settings ) ) {
+			$cg_settings = array();
+		}
+		$cg_changed = false;
+
+		if ( isset( $params['stock_provider'] ) ) {
+			$provider = sanitize_key( (string) $params['stock_provider'] );
+			$valid_provider = in_array( $provider, \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::PROVIDERS, true ) ? $provider : 'pexels';
+			$settings['stock_provider']    = $valid_provider;
+			$cg_settings['stock_provider'] = $valid_provider;
+			$cg_changed                    = true;
+		}
+
+		foreach ( array( 'pexels_api_key', 'pixabay_api_key' ) as $key_field ) {
+			if ( ! isset( $params[ $key_field ] ) || ! is_string( $params[ $key_field ] ) ) {
+				continue;
+			}
+			$raw = trim( sanitize_text_field( $params[ $key_field ] ) );
+			if ( '' === $raw ) {
+				unset( $settings[ $key_field ], $cg_settings[ $key_field ] );
+			} else {
+				$encrypted                 = Encryption::encrypt( $raw );
+				$settings[ $key_field ]    = $encrypted;
+				$cg_settings[ $key_field ] = $encrypted;
+			}
+			$cg_changed = true;
+		}
+
+		if ( $cg_changed ) {
+			update_option( $cg_option_key, $cg_settings, false );
+		}
+
 		if ( isset( $params['double_optin'] ) ) {
 			update_option( 'aime_double_optin', (bool) $settings['double_optin'], false );
 		}
@@ -837,16 +912,107 @@ class RestApi {
 		}
 
 		update_option( 'aime_settings', $settings, false );
-		aime_clear_settings_cache( array( 'aime_settings', 'aime_double_optin' ) );
+		aime_clear_settings_cache( array( 'aime_settings', 'aime_double_optin', $cg_option_key ) );
 
 		aime_log( 'Global settings updated.', 'info', 'core' );
+
+		$response_settings = $settings;
+		$response_settings['stock_provider']  = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::get_provider();
+		$response_settings['has_pexels_key']  = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::is_configured( 'pexels' );
+		$response_settings['has_pixabay_key'] = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::is_configured( 'pixabay' );
+		unset( $response_settings['smtp_password'], $response_settings['webhook_api_key'], $response_settings['pexels_api_key'], $response_settings['pixabay_api_key'] );
 
 		return new \WP_REST_Response(
 			array(
 				'message'  => __( 'Settings saved successfully.', 'ai-marketing-expert' ),
-				'settings' => $settings,
+				'settings' => $response_settings,
 			)
 		);
+	}
+
+	/**
+	 * GET /stock-images/search - Universal stock photo search.
+	 *
+	 * @param \WP_REST_Request $request Request object.
+	 * @return \WP_REST_Response
+	 */
+	public function stock_images_search( \WP_REST_Request $request ): \WP_REST_Response {
+		$service = new \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService();
+
+		$query = sanitize_text_field( (string) ( $request->get_param( 'query' ) ?: $request->get_param( 'q' ) ) );
+		if ( '' === $query ) {
+			return new \WP_REST_Response(
+				array(
+					'message' => __( 'Search query is required.', 'ai-marketing-expert' ),
+				),
+				400
+			);
+		}
+
+		$result = $service->search(
+			$query,
+			absint( $request->get_param( 'per_page' ) ?: 12 ),
+			absint( $request->get_param( 'page' ) ?: 1 ),
+			sanitize_key( (string) $request->get_param( 'orientation' ) )
+		);
+
+		if ( empty( $result['success'] ) ) {
+			return new \WP_REST_Response(
+				array(
+					'message'        => $result['error'] ?? __( 'Stock image search failed.', 'ai-marketing-expert' ),
+					'not_configured' => ! empty( $result['not_configured'] ),
+				),
+				! empty( $result['not_configured'] ) ? 400 : 502
+			);
+		}
+
+		if ( isset( $result['images'] ) && ! isset( $result['items'] ) ) {
+			$result['items'] = $result['images'];
+		}
+
+		return new \WP_REST_Response( $result );
+	}
+
+	/**
+	 * POST /stock-images/import - Sideload a stock photo into the WP Media Library.
+	 *
+	 * @param \WP_REST_Request $request Request object.
+	 * @return \WP_REST_Response
+	 */
+	public function stock_images_import( \WP_REST_Request $request ): \WP_REST_Response {
+		$service = new \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService();
+
+		$url        = esc_url_raw( (string) $request->get_param( 'url' ) );
+		$alt        = sanitize_text_field( (string) ( $request->get_param( 'alt' ) ?: '' ) );
+		$article_id = absint( $request->get_param( 'article_id' ) );
+
+		$result = $service->import_to_media_library( $url, $alt, 0 );
+
+		if ( empty( $result['success'] ) ) {
+			return new \WP_REST_Response(
+				array(
+					'message' => $result['error'] ?? __( 'Image import failed.', 'ai-marketing-expert' ),
+				),
+				400
+			);
+		}
+
+		if ( $article_id ) {
+			global $wpdb;
+			// phpcs:ignore WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching
+			$wpdb->update(
+				$wpdb->prefix . 'aime_content_articles',
+				array(
+					'featured_image_url' => $result['url'],
+					'featured_image_id'  => $result['attachment_id'],
+				),
+				array( 'id' => $article_id ),
+				array( '%s', '%d' ),
+				array( '%d' )
+			);
+		}
+
+		return new \WP_REST_Response( $result );
 	}
 
 	/**
@@ -1451,7 +1617,7 @@ class RestApi {
 				continue;
 			}
 			if ( 'aime_settings' === $name && is_array( $value ) ) {
-				unset( $value['webhook_api_key'] ); // Never export secrets.
+				unset( $value['webhook_api_key'], $value['pexels_api_key'], $value['pixabay_api_key'] ); // Never export secrets.
 			}
 
 			// Let modules strip their own secrets before export.
@@ -1489,13 +1655,12 @@ class RestApi {
 	}
 
 	/**
-	 * POST /settings/import — Restore settings and templates from an export file.
+	 * POST /settings/import — Restore settings and templates from export JSON.
 	 */
 	public function import_settings( \WP_REST_Request $request ) {
 		global $wpdb;
 
 		$data = $request->get_json_params();
-
 		if ( ! is_array( $data ) || 'aime-settings-export' !== ( $data['format'] ?? '' ) ) {
 			return new \WP_Error( 'aime_invalid_import', __( 'Invalid import file. Expected an AI Marketing Expert settings export.', 'ai-marketing-expert' ), array( 'status' => 400 ) );
 		}
@@ -1509,9 +1674,9 @@ class RestApi {
 			}
 
 			if ( 'aime_settings' === $name ) {
-				// Merge over existing so local secrets (webhook key) survive.
+				// Merge over existing so local secrets (webhook key, stock keys) survive.
 				$current = get_option( $name, array() );
-				unset( $value['webhook_api_key'] );
+				unset( $value['webhook_api_key'], $value['pexels_api_key'], $value['pixabay_api_key'] );
 				$value = array_merge( is_array( $current ) ? $current : array(), $value );
 			}
 

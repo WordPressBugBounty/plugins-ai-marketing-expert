@@ -37,19 +37,24 @@ class StockImageService {
 	/* ── Configuration ───────────────────────────────── */
 
 	public static function get_provider(): string {
+		$global   = get_option( 'aime_settings', array() );
 		$settings = get_option( self::OPTION_KEY, array() );
-		$provider = sanitize_key( (string) ( $settings['stock_provider'] ?? 'pexels' ) );
+		$raw      = ! empty( $global['stock_provider'] ) ? $global['stock_provider'] : ( $settings['stock_provider'] ?? 'pexels' );
+		$provider = sanitize_key( (string) $raw );
 
 		return in_array( $provider, self::PROVIDERS, true ) ? $provider : 'pexels';
 	}
 
 	/**
 	 * Decrypted API key for a provider ('' when not set).
+	 * Checks global plugin settings first, falling back to Content Generator settings.
 	 */
 	public static function get_api_key( string $provider = '' ): string {
 		$provider = $provider ?: self::get_provider();
+		$global   = get_option( 'aime_settings', array() );
 		$settings = get_option( self::OPTION_KEY, array() );
-		$stored   = (string) ( $settings[ $provider . '_api_key' ] ?? '' );
+		$field    = $provider . '_api_key';
+		$stored   = ! empty( $global[ $field ] ) ? (string) $global[ $field ] : (string) ( $settings[ $field ] ?? '' );
 
 		return '' !== $stored ? Encryption::decrypt( $stored ) : '';
 	}
@@ -209,11 +214,19 @@ class StockImageService {
 		$provider = self::get_provider();
 		$key      = self::get_api_key( $provider );
 		if ( '' === $key ) {
-			return array(
-				'success'        => false,
-				'not_configured' => true,
-				'error'          => __( 'No stock image API key configured. Add one under Content → Settings → Images.', 'ai-marketing-expert' ),
-			);
+			// Auto-fallback: if preferred provider has no key, check if the other provider is configured.
+			$other = 'pexels' === $provider ? 'pixabay' : 'pexels';
+			$other_key = self::get_api_key( $other );
+			if ( '' !== $other_key ) {
+				$provider = $other;
+				$key      = $other_key;
+			} else {
+				return array(
+					'success'        => false,
+					'not_configured' => true,
+					'error'          => __( 'No stock image API key configured. Add one under Settings → Stock Photos.', 'ai-marketing-expert' ),
+				);
+			}
 		}
 
 		return 'pixabay' === $provider
@@ -334,7 +347,7 @@ class StockImageService {
 			return array(
 				'success' => false,
 				'error'   => 401 === $code || 403 === $code
-					? __( 'Pexels rejected the API key. Check it under Content → Settings → Images.', 'ai-marketing-expert' )
+					? __( 'Pexels rejected the API key. Check it under Settings → Stock Photos.', 'ai-marketing-expert' )
 					/* translators: %d: HTTP status code */
 					: sprintf( __( 'Pexels API error (HTTP %d).', 'ai-marketing-expert' ), $code ),
 			);
@@ -395,7 +408,7 @@ class StockImageService {
 			return array(
 				'success' => false,
 				'error'   => 400 === $code || 401 === $code || 403 === $code
-					? __( 'Pixabay rejected the API key. Check it under Content → Settings → Images.', 'ai-marketing-expert' )
+					? __( 'Pixabay rejected the API key. Check it under Settings → Stock Photos.', 'ai-marketing-expert' )
 					/* translators: %d: HTTP status code */
 					: sprintf( __( 'Pixabay API error (HTTP %d).', 'ai-marketing-expert' ), $code ),
 			);

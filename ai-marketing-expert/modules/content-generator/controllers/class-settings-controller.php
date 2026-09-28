@@ -39,9 +39,10 @@ class SettingsController {
 		$settings = get_option( self::OPTION_KEY, array() );
 		$merged   = array_merge( self::DEFAULTS, $settings );
 
-		// Never expose stock API keys (stored encrypted) — only report presence.
-		$merged['has_pexels_key']  = ! empty( $merged['pexels_api_key'] );
-		$merged['has_pixabay_key'] = ! empty( $merged['pixabay_api_key'] );
+		// Resolve provider and key presence across global and module settings.
+		$merged['stock_provider']  = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::get_provider();
+		$merged['has_pexels_key']  = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::is_configured( 'pexels' );
+		$merged['has_pixabay_key'] = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::is_configured( 'pixabay' );
 		unset( $merged['pexels_api_key'], $merged['pixabay_api_key'] );
 
 		if ( ! aime_has_pro() ) {
@@ -83,11 +84,20 @@ class SettingsController {
 			$current['default_category_id'] = absint( $params['default_category_id'] );
 		}
 
+		$global_settings = get_option( 'aime_settings', array() );
+		if ( ! is_array( $global_settings ) ) {
+			$global_settings = array();
+		}
+		$global_changed = false;
+
 		// Image settings. The old image_source select is gone from the UI —
 		// stale stored values are simply ignored on read.
 		if ( isset( $params['stock_provider'] ) ) {
 			$provider = sanitize_key( $params['stock_provider'] );
-			$current['stock_provider'] = in_array( $provider, \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::PROVIDERS, true ) ? $provider : 'pexels';
+			$valid_provider = in_array( $provider, \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::PROVIDERS, true ) ? $provider : 'pexels';
+			$current['stock_provider']         = $valid_provider;
+			$global_settings['stock_provider'] = $valid_provider;
+			$global_changed                    = true;
 		}
 
 		if ( isset( $params['inline_images'] ) ) {
@@ -116,10 +126,13 @@ class SettingsController {
 			}
 			$raw = trim( sanitize_text_field( $params[ $key_field ] ) );
 			if ( '' === $raw ) {
-				unset( $current[ $key_field ] );
+				unset( $current[ $key_field ], $global_settings[ $key_field ] );
 			} else {
-				$current[ $key_field ] = \WPSpace\AiMarketingExpert\Encryption::encrypt( $raw );
+				$encrypted                      = \WPSpace\AiMarketingExpert\Encryption::encrypt( $raw );
+				$current[ $key_field ]          = $encrypted;
+				$global_settings[ $key_field ]  = $encrypted;
 			}
+			$global_changed = true;
 		}
 
 		$bool_fields = array( 'auto_seo_optimize', 'auto_generate_meta', 'auto_generate_excerpt', 'auto_internal_links' );
@@ -130,11 +143,17 @@ class SettingsController {
 		}
 
 		update_option( self::OPTION_KEY, $current, false );
-		aime_clear_settings_cache( array( self::OPTION_KEY ) );
+		if ( $global_changed ) {
+			update_option( 'aime_settings', $global_settings, false );
+			aime_clear_settings_cache( array( self::OPTION_KEY, 'aime_settings' ) );
+		} else {
+			aime_clear_settings_cache( array( self::OPTION_KEY ) );
+		}
 
 		$response = array_merge( self::DEFAULTS, $current );
-		$response['has_pexels_key']  = ! empty( $response['pexels_api_key'] );
-		$response['has_pixabay_key'] = ! empty( $response['pixabay_api_key'] );
+		$response['stock_provider']  = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::get_provider();
+		$response['has_pexels_key']  = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::is_configured( 'pexels' );
+		$response['has_pixabay_key'] = \WPSpace\AiMarketingExpert\Modules\ContentGenerator\Services\StockImageService::is_configured( 'pixabay' );
 		unset( $response['pexels_api_key'], $response['pixabay_api_key'] );
 
 		return new \WP_REST_Response( array(

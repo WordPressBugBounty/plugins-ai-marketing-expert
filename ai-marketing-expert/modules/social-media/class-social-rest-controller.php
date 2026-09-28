@@ -237,6 +237,7 @@ class SocialRestController {
 				'topic'    => array( 'type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_textarea_field' ),
 				'platform' => array( 'type' => 'string', 'default' => 'facebook', 'sanitize_callback' => 'sanitize_text_field' ),
 				'tone'     => array( 'type' => 'string', 'default' => 'professional', 'sanitize_callback' => 'sanitize_text_field' ),
+				'length'   => array( 'type' => 'string', 'default' => 'medium', 'sanitize_callback' => 'sanitize_key' ),
 				'context'  => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_textarea_field' ),
 			),
 		) );
