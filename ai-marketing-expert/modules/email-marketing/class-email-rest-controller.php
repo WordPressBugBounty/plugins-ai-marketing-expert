@@ -278,6 +278,41 @@ class EmailRestController {
 			),
 		) );
 
+		// GET /email/deliverability/settings (admin)
+		register_rest_route( $this->ns, '/email/deliverability/settings', array(
+			'methods'             => 'GET',
+			'callback'            => array( $c, 'get_deliverability_settings' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+		) );
+
+		// POST /email/deliverability/settings (admin)
+		register_rest_route( $this->ns, '/email/deliverability/settings', array(
+			'methods'             => 'POST',
+			'callback'            => array( $c, 'save_deliverability_settings' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+		) );
+
+		// POST /email/deliverability/test-imap (admin)
+		register_rest_route( $this->ns, '/email/deliverability/test-imap', array(
+			'methods'             => 'POST',
+			'callback'            => array( $c, 'test_imap_endpoint' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+		) );
+
+		// POST /email/deliverability/sync-esp (admin)
+		register_rest_route( $this->ns, '/email/deliverability/sync-esp', array(
+			'methods'             => 'POST',
+			'callback'            => array( $c, 'sync_esp_endpoint' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+		) );
+
+		// GET /email/leads/quota (admin)
+		register_rest_route( $this->ns, '/email/leads/quota', array(
+			'methods'             => 'GET',
+			'callback'            => array( $c, 'get_lead_quota_endpoint' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+		) );
+
 		// GET /email/leads/search (admin)
 		register_rest_route( $this->ns, '/email/leads/search', array(
 			'methods'             => 'GET',
@@ -1003,7 +1038,8 @@ class EmailRestController {
 
 		return new \WP_REST_Response( array(
 			'enabled'                 => SmtpProvider::is_site_mail_enabled(),
-			'show_option'             => ! empty( $detected_plugins ),
+			'show_option'             => true,
+			'has_detected_plugins'    => ! empty( $detected_plugins ),
 			'detected_smtp_plugins'   => $detected_plugins,
 		) );
 	}
@@ -1043,7 +1079,8 @@ class EmailRestController {
 
 		return new \WP_REST_Response( array(
 			'enabled'                 => SmtpProvider::is_site_mail_enabled(),
-			'show_option'             => ! empty( $detected_plugins ),
+			'show_option'             => true,
+			'has_detected_plugins'    => ! empty( $detected_plugins ),
 			'detected_smtp_plugins'   => $detected_plugins,
 			'message'                 => $enabled
 				? __( 'AI Marketing Expert SMTP will handle all site emails.', 'ai-marketing-expert' )

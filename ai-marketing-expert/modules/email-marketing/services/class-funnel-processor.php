@@ -82,6 +82,115 @@ class FunnelProcessor {
 	}
 
 	/**
+	 * Process a batch of pending funnel subscribers with slow-drip throttling.
+	 *
+	 * Suitable for detached CLI runners and local task schedulers.
+	 *
+	 * @param int           $limit     Maximum subscribers to process.
+	 * @param int           $min_delay Minimum seconds delay between sends.
+	 * @param int           $max_delay Maximum seconds delay between sends.
+	 * @param callable|null $logger    Optional callback function (string $msg).
+	 * @return array Execution statistics.
+	 */
+	public function process_slow_drip_batch( int $limit = 100, int $min_delay = 30, int $max_delay = 35, ?callable $logger = null, int $lookahead_hours = 4 ): array {
+		global $wpdb;
+		$p = $wpdb->prefix;
+
+		$log = function( string $msg ) use ( $logger ) {
+			if ( is_callable( $logger ) ) {
+				call_user_func( $logger, $msg );
+			}
+		};
+
+		$stats = array(
+			'total_found' => 0,
+			'processed'   => 0,
+			'sent'        => 0,
+			'skipped'     => 0,
+			'errors'      => 0,
+		);
+
+		// Include items due now or within the lookahead window (e.g. tonight's scheduled outreach)
+		$cutoff_time = gmdate( 'Y-m-d H:i:s', time() + ( $lookahead_hours * HOUR_IN_SECONDS ) );
+
+		$rows = $wpdb->get_results(
+			$wpdb->prepare(
+				"SELECT fs.*, s.email, s.first_name, s.last_name, s.status AS sub_status, f.title AS funnel_title
+				 FROM {$p}aime_funnel_subscribers fs
+				 INNER JOIN {$p}aime_subscribers s ON s.id = fs.subscriber_id
+				 INNER JOIN {$p}aime_funnels f ON f.id = fs.funnel_id
+				 WHERE fs.status = 'active'
+				 AND f.status = 'published'
+				 AND fs.next_execution_time IS NOT NULL
+				 AND fs.next_execution_time <= %s
+				 ORDER BY fs.next_execution_time ASC
+				 LIMIT %d",
+				$cutoff_time,
+				$limit
+			)
+		);
+
+		$stats['total_found'] = is_array( $rows ) ? count( $rows ) : 0;
+		$log( sprintf( 'Found %d pending subscriber(s) ready for execution (cutoff: %s UTC).', $stats['total_found'], $cutoff_time ) );
+
+		if ( empty( $rows ) ) {
+			return $stats;
+		}
+
+		$count = 0;
+		foreach ( $rows as $row ) {
+			$count++;
+
+			// Claim the row with a 30m window so other workers don't grab it.
+			$claimed = $wpdb->query(
+				$wpdb->prepare(
+					"UPDATE {$p}aime_funnel_subscribers
+					 SET next_execution_time = %s
+					 WHERE id = %d AND status = 'active' AND next_execution_time = %s",
+					gmdate( 'Y-m-d H:i:s', time() + 30 * MINUTE_IN_SECONDS ),
+					$row->id,
+					$row->next_execution_time
+				)
+			);
+			if ( ! $claimed ) {
+				$stats['skipped']++;
+				continue;
+			}
+
+			// Pre-flight MX record verification to eliminate "Address not found" / 550 dead mailbox bounces.
+			$domain = substr( (string) strrchr( $row->email, '@' ), 1 );
+			if ( ! empty( $domain ) && class_exists( '\WPSpace\AiMarketingExpert\EmailValidator' ) && ! \WPSpace\AiMarketingExpert\EmailValidator::has_mailable_domain( $domain ) ) {
+				$log( sprintf( '  ⚠ Domain "%s" has no mail server (no MX record). Marking bounced and skipping: %s', $domain, $row->email ) );
+				$wpdb->update( "{$p}aime_subscribers", array( 'status' => 'bounced' ), array( 'id' => $row->subscriber_id ) );
+				$this->complete_funnel( $row, (int) $row->next_sequence_id );
+				$stats['skipped']++;
+				continue;
+			}
+
+			$log( sprintf( '[%d/%d] Dispatching to %s (Funnel: %s, Sub ID: %d)...', $count, $stats['total_found'], $row->email, $row->funnel_title ?? $row->funnel_id, $row->subscriber_id ) );
+
+			try {
+				$this->execute_for_subscriber( $row );
+				$stats['processed']++;
+				$stats['sent']++;
+				$log( sprintf( '  ✓ Sent to %s', $row->email ) );
+			} catch ( \Throwable $e ) {
+				$stats['errors']++;
+				$log( sprintf( '  ✗ Error for %s: %s', $row->email, $e->getMessage() ) );
+			}
+
+			// Slow-drip throttle between sends (except after last row).
+			if ( $count < count( $rows ) ) {
+				$delay = ( $min_delay >= $max_delay ) ? $min_delay : wp_rand( $min_delay, $max_delay );
+				$log( sprintf( '  Throttling: waiting %d seconds before next dispatch...', $delay ) );
+				sleep( $delay );
+			}
+		}
+
+		return $stats;
+	}
+
+	/**
 	 * Trigger a funnel for a subscriber (entry point from hooks).
 	 */
 	public function trigger( int $funnel_id, int $subscriber_id ): void {
@@ -322,6 +431,8 @@ class FunnelProcessor {
 		// Build a signed unsubscribe URL bound to the subscriber's current status,
 		// mirroring the campaign path. Automation emails are not tied to a campaign,
 		// so campaign_id is 0.
+		$base_tracking_url = \WPSpace\AiMarketingExpert\Modules\EmailMarketing\EmailMarketingModule::get_tracking_base_url();
+
 		$unsub_url = add_query_arg(
 			array(
 				'aime_track' => 'unsubscribe',
@@ -331,7 +442,7 @@ class FunnelProcessor {
 					(string) ( $row->sub_status ?? 'subscribed' )
 				),
 			),
-			home_url()
+			$base_tracking_url
 		);
 
 		$view_in_browser_url = add_query_arg(
@@ -339,7 +450,7 @@ class FunnelProcessor {
 				'aime_track' => 'web_view',
 				'hash'       => $email_hash,
 			),
-			home_url()
+			$base_tracking_url
 		);
 
 		// Merge tags (escape values for HTML context).
@@ -367,7 +478,7 @@ class FunnelProcessor {
 		);
 
 		$body = $this->append_footer( $body, $email_context );
-		$body = $this->inject_tracking( $body, $email_context );
+		$body = $this->inject_tracking( $body, $email_context, $sequence );
 
 		$from_name  = get_option( 'aime_from_name', get_bloginfo( 'name' ) );
 		$from_email = get_option( 'aime_from_email', get_option( 'admin_email' ) );
@@ -415,24 +526,67 @@ class FunnelProcessor {
 		return $sent;
 	}
 
-	private function inject_tracking( string $body, object $email ): string {
-		$settings     = get_option( 'aime_settings', array() );
-		$track_opens  = ! array_key_exists( 'track_opens', $settings ) || (bool) $settings['track_opens'];
-		$track_clicks = ! array_key_exists( 'track_clicks', $settings ) || (bool) $settings['track_clicks'];
+	private function inject_tracking( string $body, object $email, ?object $sequence = null ): string {
+		$global_settings = get_option( 'aime_settings', array() );
+		$track_opens     = ! array_key_exists( 'track_opens', $global_settings ) || (bool) $global_settings['track_opens'];
+		$track_clicks    = ! array_key_exists( 'track_clicks', $global_settings ) || (bool) $global_settings['track_clicks'];
+
+		// Check sequence-level overrides if specified in settings.
+		if ( $sequence && ! empty( $sequence->settings ) ) {
+			$seq_settings = is_array( $sequence->settings ) ? $sequence->settings : json_decode( (string) $sequence->settings, true );
+			if ( is_array( $seq_settings ) ) {
+				if ( array_key_exists( 'track_opens', $seq_settings ) ) {
+					$track_opens = (bool) $seq_settings['track_opens'];
+				}
+				if ( array_key_exists( 'track_clicks', $seq_settings ) ) {
+					$track_clicks = (bool) $seq_settings['track_clicks'];
+				}
+			}
+		}
+
+		/**
+		 * Filter whether to track opens and clicks for this funnel email.
+		 */
+		$track_opens  = (bool) apply_filters( 'aime_funnel_track_opens', $track_opens, $email, $sequence );
+		$track_clicks = (bool) apply_filters( 'aime_funnel_track_clicks', $track_clicks, $email, $sequence );
 
 		if ( ! $track_opens && ! $track_clicks ) {
 			return $body;
 		}
 
-		$token = \WPSpace\AiMarketingExpert\Modules\EmailMarketing\EmailMarketingModule::create_tracking_hash( (int) $email->campaign_id, (int) $email->subscriber_id );
+		$base_tracking_url = \WPSpace\AiMarketingExpert\Modules\EmailMarketing\EmailMarketingModule::get_tracking_base_url();
+		$token             = \WPSpace\AiMarketingExpert\Modules\EmailMarketing\EmailMarketingModule::create_tracking_hash( (int) $email->campaign_id, (int) $email->subscriber_id );
+
 		if ( $track_clicks ) {
 			$body = preg_replace_callback(
-				'/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>/i',
-				function ( $matches ) use ( $email, $token ) {
-					$original = $matches[1];
-					if ( strpos( $original, 'aime_track' ) !== false ) {
+				'/<a\s([^>]*)href=["\']([^"\']+)["\']([^>]*)>/i',
+				function ( $matches ) use ( $email, $token, $base_tracking_url ) {
+					$before_href = $matches[1];
+					$original    = trim( $matches[2] );
+					$after_href  = $matches[3];
+
+					if ( false !== strpos( $original, 'aime_track' ) ) {
 						return $matches[0];
 					}
+
+					// Protocol whitelisting: Strictly skip mailto, tel, sms, javascript, and anchor # links.
+					$lower = strtolower( $original );
+					if (
+						'' === $original ||
+						'#' === $original[0] ||
+						0 === strpos( $lower, 'mailto:' ) ||
+						0 === strpos( $lower, 'tel:' ) ||
+						0 === strpos( $lower, 'sms:' ) ||
+						0 === strpos( $lower, 'javascript:' )
+					) {
+						return $matches[0];
+					}
+
+					// Only rewrite valid HTTP / HTTPS web links.
+					if ( 0 !== strpos( $lower, 'http://' ) && 0 !== strpos( $lower, 'https://' ) ) {
+						return $matches[0];
+					}
+
 					$tracked = add_query_arg(
 						array(
 							'aime_track' => 'click',
@@ -441,9 +595,10 @@ class FunnelProcessor {
 							'url'        => rawurlencode( $original ),
 							'sig'        => \WPSpace\AiMarketingExpert\Modules\EmailMarketing\EmailMarketingModule::create_url_signature( (int) $email->campaign_id, (int) $email->subscriber_id, $original ),
 						),
-						home_url()
+						$base_tracking_url
 					);
-					return str_replace( $original, $tracked, $matches[0] );
+
+					return '<a ' . $before_href . 'href="' . esc_url( $tracked ) . '"' . $after_href . '>';
 				},
 				$body
 			);
@@ -459,7 +614,7 @@ class FunnelProcessor {
 				'hash'       => $email->email_hash,
 				'token'      => $token,
 			),
-			home_url()
+			$base_tracking_url
 		);
 		$pixel = '<img src="' . esc_url( $pixel_url ) . '" width="1" height="1" style="display:none" alt="" />';
 

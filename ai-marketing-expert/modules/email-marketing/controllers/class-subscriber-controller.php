@@ -1888,18 +1888,347 @@ class SubscriberController {
 		) );
 	}
 
+	/**
+	 * Get Deliverability & Bounce Shield configuration.
+	 */
+	public function get_deliverability_settings( \WP_REST_Request $request ): \WP_REST_Response {
+		$imap_settings = get_option( 'aime_bounce_imap_settings', array() );
+		$token         = get_option( 'aime_webhook_token', '' );
+		if ( empty( $token ) ) {
+			$token = wp_generate_password( 32, false );
+			update_option( 'aime_webhook_token', $token, false );
+		}
+
+		$connections        = \WPSpace\AiMarketingExpert\SmtpProvider::get_connections();
+		$imap_mailbox_count = 0;
+		$cloud_esp_count    = 0;
+		$active_providers   = array();
+		$primary_conn       = null;
+		$total_smtp_count   = 0;
+
+		foreach ( $connections as $conn ) {
+			if ( ! empty( $conn['is_primary'] ) && null === $primary_conn ) {
+				$primary_conn = $conn;
+			}
+			if ( empty( $conn['enabled'] ) ) {
+				continue;
+			}
+			$provider = $conn['provider'] ?? '';
+			if ( 'wp_mail' !== $provider ) {
+				$total_smtp_count++;
+			}
+			if ( in_array( $provider, array( 'brevo', 'sendgrid', 'mailgun', 'amazon_ses' ), true ) ) {
+				if ( ! in_array( $provider, $active_providers, true ) ) {
+					$active_providers[] = $provider;
+					$cloud_esp_count++;
+				}
+			}
+			if ( ! empty( $conn['bounce_imap']['enabled'] ) ) {
+				$imap_mailbox_count++;
+			}
+		}
+
+		if ( null === $primary_conn && ! empty( $connections ) ) {
+			$primary_conn = $connections[0];
+		}
+
+		$primary_has_imap = ! empty( $primary_conn['bounce_imap']['enabled'] );
+
+		$has_legacy_imap = ! empty( $imap_settings['enabled'] ) && ! empty( $imap_settings['host'] );
+		if ( $has_legacy_imap && 0 === $imap_mailbox_count ) {
+			$imap_mailbox_count = 1;
+		}
+
+		global $wpdb;
+		$subscribers_table = $wpdb->prefix . 'aime_subscribers';
+		$total_bounced     = (int) $wpdb->get_var( $wpdb->prepare( "SELECT COUNT(id) FROM {$subscribers_table} WHERE status = %s", 'bounced' ) );
+
+		return new \WP_REST_Response( array(
+			'is_pro'                 => aime_has_pro(),
+			'preflight_mx_check'     => (bool) get_option( 'aime_preflight_mx_check', true ),
+			'auto_sync_esp'          => (bool) get_option( 'aime_auto_sync_esp', true ),
+			'esp_sync_interval'      => get_option( 'aime_esp_sync_interval', 'daily' ),
+			'last_esp_sync'          => get_option( 'aime_esp_last_sync_timestamp', '' ),
+			'total_bounced'          => $total_bounced,
+			'imap_mailbox_count'     => $imap_mailbox_count,
+			'cloud_esp_count'        => $cloud_esp_count,
+			'active_esp_names'       => $active_providers,
+			'primary_smtp_name'      => $primary_conn['name'] ?? '',
+			'primary_smtp_provider'  => $primary_conn['provider'] ?? '',
+			'primary_smtp_has_imap'  => $primary_has_imap,
+			'total_smtp_count'       => $total_smtp_count,
+			'has_legacy_imap'        => $has_legacy_imap,
+			'imap_enabled'           => ! empty( $imap_settings['enabled'] ),
+			'imap_host'              => sanitize_text_field( $imap_settings['host'] ?? '' ),
+			'imap_port'              => absint( $imap_settings['port'] ?? 993 ),
+			'imap_encryption'        => sanitize_text_field( $imap_settings['encryption'] ?? 'ssl' ),
+			'imap_username'          => sanitize_text_field( $imap_settings['username'] ?? '' ),
+			'imap_has_password'      => ! empty( $imap_settings['password'] ),
+			'imap_delete_after'      => ! empty( $imap_settings['delete_after_process'] ),
+			'webhook_bounce_url'     => rest_url( 'aime/v1/email/webhook/bounce' ),
+			'webhook_token'          => $token,
+		) );
+	}
+
+	/**
+	 * Save Deliverability & Bounce Shield configuration.
+	 */
+	public function save_deliverability_settings( \WP_REST_Request $request ): \WP_REST_Response {
+		if ( ! aime_has_pro() ) {
+			return new \WP_REST_Response( array(
+				'code'    => 'pro_required',
+				'message' => __( 'Configuring advanced deliverability settings is a Pro feature.', 'ai-marketing-expert' ),
+			), 403 );
+		}
+
+		if ( $request->has_param( 'preflight_mx_check' ) ) {
+			update_option( 'aime_preflight_mx_check', (bool) $request->get_param( 'preflight_mx_check' ), false );
+		}
+
+		if ( $request->has_param( 'auto_sync_esp' ) ) {
+			update_option( 'aime_auto_sync_esp', (bool) $request->get_param( 'auto_sync_esp' ), false );
+		}
+
+		if ( $request->has_param( 'esp_sync_interval' ) ) {
+			update_option( 'aime_esp_sync_interval', sanitize_text_field( $request->get_param( 'esp_sync_interval' ) ), false );
+		}
+
+		$current_imap = get_option( 'aime_bounce_imap_settings', array() );
+		$new_imap     = array(
+			'enabled'              => (bool) ( $request->get_param( 'imap_enabled' ) ?? ( $current_imap['enabled'] ?? false ) ),
+			'host'                 => sanitize_text_field( $request->get_param( 'imap_host' ) ?? ( $current_imap['host'] ?? '' ) ),
+			'port'                 => absint( $request->get_param( 'imap_port' ) ?? ( $current_imap['port'] ?? 993 ) ),
+			'encryption'           => sanitize_text_field( $request->get_param( 'imap_encryption' ) ?? ( $current_imap['encryption'] ?? 'ssl' ) ),
+			'username'             => sanitize_text_field( $request->get_param( 'imap_username' ) ?? ( $current_imap['username'] ?? '' ) ),
+			'delete_after_process' => (bool) ( $request->get_param( 'imap_delete_after' ) ?? ( $current_imap['delete_after_process'] ?? false ) ),
+			'password'             => $current_imap['password'] ?? '',
+		);
+
+		$new_pass = (string) ( $request->get_param( 'imap_password' ) ?? '' );
+		if ( '' !== trim( $new_pass ) ) {
+			$new_imap['password'] = \WPSpace\AiMarketingExpert\Encryption::encrypt( $new_pass );
+		}
+
+		update_option( 'aime_bounce_imap_settings', $new_imap, false );
+
+		return new \WP_REST_Response( array( 'message' => __( 'Deliverability settings saved successfully.', 'ai-marketing-expert' ) ) );
+	}
+
+	/**
+	 * Test IMAP connection endpoint.
+	 */
+	public function test_imap_endpoint( \WP_REST_Request $request ): \WP_REST_Response {
+		$current_imap = get_option( 'aime_bounce_imap_settings', array() );
+		$password     = (string) ( $request->get_param( 'password' ) ?? '' );
+		$conn_id      = sanitize_key( $request->get_param( 'connection_id' ) ?: $request->get_param( 'id' ) );
+
+		if ( $conn_id && ( empty( $password ) || \WPSpace\AiMarketingExpert\SmtpProvider::PASSWORD_MASK === $password ) ) {
+			foreach ( \WPSpace\AiMarketingExpert\SmtpProvider::get_connections() as $conn ) {
+				if ( ( $conn['id'] ?? '' ) === $conn_id ) {
+					if ( ! empty( $conn['bounce_imap']['password'] ) ) {
+						$password = \WPSpace\AiMarketingExpert\Encryption::decrypt( $conn['bounce_imap']['password'] );
+					} elseif ( ! empty( $conn['smtp_password'] ) ) {
+						$password = \WPSpace\AiMarketingExpert\Encryption::decrypt( $conn['smtp_password'] );
+					}
+					break;
+				}
+			}
+		}
+
+		if ( empty( $password ) && ! empty( $current_imap['password'] ) ) {
+			$password = \WPSpace\AiMarketingExpert\Encryption::decrypt( $current_imap['password'] );
+		}
+
+		$config = array(
+			'host'       => sanitize_text_field( $request->get_param( 'host' ) ?: ( $current_imap['host'] ?? '' ) ),
+			'port'       => absint( $request->get_param( 'port' ) ?: ( $current_imap['port'] ?? 993 ) ),
+			'encryption' => sanitize_text_field( $request->get_param( 'encryption' ) ?: ( $current_imap['encryption'] ?? 'ssl' ) ),
+			'username'   => sanitize_text_field( $request->get_param( 'username' ) ?: ( $current_imap['username'] ?? '' ) ),
+			'password'   => $password,
+		);
+
+		$result = \WPSpace\AiMarketingExpert\PureImapClient::test_connection( $config );
+
+		return new \WP_REST_Response( $result );
+	}
+
+	/**
+	 * Trigger manual Cloud ESP suppression sync endpoint.
+	 */
+	public function sync_esp_endpoint( \WP_REST_Request $request ): \WP_REST_Response {
+		if ( ! aime_has_pro() ) {
+			return new \WP_REST_Response( array( 'message' => __( 'Cloud ESP suppression sync is a Pro feature.', 'ai-marketing-expert' ) ), 403 );
+		}
+
+		if ( function_exists( 'set_time_limit' ) ) {
+			@set_time_limit( 45 );
+		}
+
+		try {
+			$result = \WPSpace\AiMarketingExpert\Modules\EmailMarketing\Services\CloudEspSyncService::sync_all();
+		} catch ( \Throwable $t ) {
+			return new \WP_REST_Response( array(
+				'success' => false,
+				'message' => sprintf(
+					/* translators: %s: error message */
+					__( 'Sync encountered an error: %s', 'ai-marketing-expert' ),
+					$t->getMessage()
+				),
+				'details' => array(
+					'total_synced'  => 0,
+					'total_bounced' => 0,
+					'errors'        => array( $t->getMessage() ),
+				),
+			), 500 );
+		}
+
+		$errors = array();
+		if ( ! empty( $result['details']['imap_mailboxes']['errors'] ) ) {
+			$errors = (array) $result['details']['imap_mailboxes']['errors'];
+		}
+
+		$notice_message = sprintf(
+			/* translators: 1: total events fetched, 2: total bounced quarantined */
+			__( 'Sync complete. Processed %1$d events/emails, quarantined %2$d dead addresses.', 'ai-marketing-expert' ),
+			$result['total_synced'],
+			$result['total_bounced']
+		);
+
+		if ( ! empty( $errors ) ) {
+			$notice_message .= ' ' . sprintf(
+				/* translators: %s: error details */
+				__( '(Notices: %s)', 'ai-marketing-expert' ),
+				implode( '; ', array_slice( $errors, 0, 2 ) )
+			);
+		}
+
+		return new \WP_REST_Response( array(
+			'success' => true,
+			'message' => $notice_message,
+			'details' => $result,
+		) );
+	}
+
 	/* ================================================================
 	 *  B2B LEAD FINDER / PROSPECTING
 	 * ============================================================= */
 
 	/**
+	 * Get current B2B Lead Finder usage and quota limits.
+	 *
+	 * @return array
+	 */
+	public static function get_lead_quota(): array {
+		$is_pro = aime_has_pro();
+		if ( $is_pro ) {
+			return array(
+				'is_pro'          => true,
+				'daily_used'      => 0,
+				'daily_limit'     => -1,
+				'monthly_used'    => 0,
+				'monthly_limit'   => -1,
+				'remaining_today' => -1,
+				'can_search'      => true,
+				'can_import'      => true,
+			);
+		}
+
+		$today = current_time( 'Y-m-d' );
+		$month = current_time( 'Y-m' );
+
+		$usage = get_option( 'aime_free_lead_usage', array() );
+		if ( ! is_array( $usage ) ) {
+			$usage = array();
+		}
+
+		if ( ( $usage['date'] ?? '' ) !== $today ) {
+			$usage['date']        = $today;
+			$usage['daily_count'] = 0;
+		}
+
+		if ( ( $usage['month'] ?? '' ) !== $month ) {
+			$usage['month']         = $month;
+			$usage['monthly_count'] = 0;
+		}
+
+		$daily_limit   = 5;
+		$monthly_limit = 100;
+
+		$daily_used   = (int) ( $usage['daily_count'] ?? 0 );
+		$monthly_used = (int) ( $usage['monthly_count'] ?? 0 );
+
+		$can_search = ( $daily_used < $daily_limit ) && ( $monthly_used < $monthly_limit );
+		$can_import = $can_search;
+
+		return array(
+			'is_pro'          => false,
+			'daily_used'      => $daily_used,
+			'daily_limit'     => $daily_limit,
+			'monthly_used'    => $monthly_used,
+			'monthly_limit'   => $monthly_limit,
+			'remaining_today' => max( 0, $daily_limit - $daily_used ),
+			'can_search'      => $can_search,
+			'can_import'      => $can_import,
+		);
+	}
+
+	/**
+	 * Increment free leads usage counter.
+	 *
+	 * @param int $count Number of leads to increment.
+	 */
+	public static function increment_lead_usage( int $count = 1 ): void {
+		if ( aime_has_pro() || $count <= 0 ) {
+			return;
+		}
+
+		$today = current_time( 'Y-m-d' );
+		$month = current_time( 'Y-m' );
+
+		$usage = get_option( 'aime_free_lead_usage', array() );
+		if ( ! is_array( $usage ) ) {
+			$usage = array();
+		}
+
+		if ( ( $usage['date'] ?? '' ) !== $today ) {
+			$usage['date']        = $today;
+			$usage['daily_count'] = 0;
+		}
+
+		if ( ( $usage['month'] ?? '' ) !== $month ) {
+			$usage['month']         = $month;
+			$usage['monthly_count'] = 0;
+		}
+
+		$usage['daily_count']   = (int) ( $usage['daily_count'] ?? 0 ) + $count;
+		$usage['monthly_count'] = (int) ( $usage['monthly_count'] ?? 0 ) + $count;
+
+		update_option( 'aime_free_lead_usage', $usage, false );
+	}
+
+	/**
+	 * REST Endpoint: Get current B2B Lead Finder quota.
+	 */
+	public function get_lead_quota_endpoint( \WP_REST_Request $request ): \WP_REST_Response {
+		return new \WP_REST_Response( self::get_lead_quota() );
+	}
+
+	/**
 	 * Search for prospective B2B leads using AI heuristics & DNS verification.
 	 */
 	public function search_leads( \WP_REST_Request $request ): \WP_REST_Response {
-		if ( ! aime_has_pro() ) {
+		$quota = self::get_lead_quota();
+
+		if ( ! $quota['is_pro'] && ! $quota['can_search'] ) {
 			return new \WP_REST_Response( array(
-				'code'    => 'pro_required',
-				'message' => __( 'B2B Lead Finder is a Pro feature. Please upgrade to Pro.', 'ai-marketing-expert' ),
+				'code'    => 'free_quota_exceeded',
+				'message' => sprintf(
+					/* translators: 1: daily limit, 2: monthly limit */
+					__( 'You have reached your Free Tier quota (%1$d leads/day, %2$d leads/month). Upgrade to Pro for unlimited leads & 24/7 Autopilot prospecting!', 'ai-marketing-expert' ),
+					$quota['daily_limit'],
+					$quota['monthly_limit']
+				),
+				'quota'   => $quota,
 			), 403 );
 		}
 
@@ -1912,7 +2241,14 @@ class SubscriberController {
 		$raw_limit    = $request->get_param( 'limit' );
 		$limit        = ( null !== $raw_per_page && '' !== $raw_per_page ) ? absint( $raw_per_page ) : absint( $raw_limit ?: 10 );
 		$limit        = min( 50, max( 3, $limit ?: 10 ) );
-		$page         = max( 1, absint( $request->get_param( 'page' ) ?: 1 ) );
+
+		// Cap Free Tier requests to remaining daily quota (max 5)
+		if ( ! $quota['is_pro'] ) {
+			$remaining = max( 1, $quota['daily_limit'] - $quota['daily_used'] );
+			$limit     = min( $limit, $remaining );
+		}
+
+		$page = max( 1, absint( $request->get_param( 'page' ) ?: 1 ) );
 
 		if ( empty( $industry ) && empty( $role ) && empty( $keyword ) ) {
 			return new \WP_REST_Response( array(
@@ -1929,6 +2265,7 @@ class SubscriberController {
 		);
 
 		$result = B2bScraperService::discover_leads( $criteria, $page, $limit );
+		$result['quota'] = self::get_lead_quota();
 
 		return new \WP_REST_Response( $result );
 	}
@@ -1937,10 +2274,13 @@ class SubscriberController {
 	 * Import verified prospective leads into the subscriber CRM.
 	 */
 	public function import_leads( \WP_REST_Request $request ): \WP_REST_Response {
-		if ( ! aime_has_pro() ) {
+		$quota = self::get_lead_quota();
+
+		if ( ! $quota['is_pro'] && ! $quota['can_import'] ) {
 			return new \WP_REST_Response( array(
-				'code'    => 'pro_required',
-				'message' => __( 'B2B Lead Finder is a Pro feature. Please upgrade to Pro.', 'ai-marketing-expert' ),
+				'code'    => 'free_quota_exceeded',
+				'message' => __( 'Free Tier limit reached (5 leads/day, 100 leads/month). Upgrade to Pro to import unlimited leads.', 'ai-marketing-expert' ),
+				'quota'   => $quota,
 			), 403 );
 		}
 
@@ -1951,6 +2291,18 @@ class SubscriberController {
 		$raw_leads = $request->get_param( 'leads' );
 		if ( ! is_array( $raw_leads ) || empty( $raw_leads ) ) {
 			return new \WP_REST_Response( array( 'message' => __( 'No leads provided to import.', 'ai-marketing-expert' ) ), 400 );
+		}
+
+		if ( ! $quota['is_pro'] ) {
+			$remaining = max( 0, $quota['daily_limit'] - $quota['daily_used'] );
+			if ( $remaining <= 0 ) {
+				return new \WP_REST_Response( array(
+					'code'    => 'free_quota_exceeded',
+					'message' => __( 'Daily Free Tier quota reached (5/5). Upgrade to Pro for unlimited leads.', 'ai-marketing-expert' ),
+					'quota'   => $quota,
+				), 403 );
+			}
+			$raw_leads = array_slice( $raw_leads, 0, $remaining );
 		}
 
 		$list_id   = absint( $request->get_param( 'list_id' ) ?: 0 );
@@ -2043,10 +2395,15 @@ class SubscriberController {
 			}
 		}
 
+		if ( $imported > 0 ) {
+			self::increment_lead_usage( $imported );
+		}
+
 		return new \WP_REST_Response( array(
 			'imported' => $imported,
 			'updated'  => $updated,
 			'invalid'  => $invalid,
+			'quota'    => self::get_lead_quota(),
 			'message'  => sprintf(
 				/* translators: 1: imported count, 2: updated count */
 				__( '%1$d leads imported, %2$d existing contacts updated.', 'ai-marketing-expert' ),

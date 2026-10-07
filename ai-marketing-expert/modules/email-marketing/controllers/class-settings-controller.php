@@ -266,6 +266,7 @@ class SettingsController {
 			'resubscribe_button_text' => get_option( 'aime_resubscribe_button_text', '' ),
 			'double_optin'      => (bool) $double_optin,
 			'emails_per_second' => (int) get_option( 'aime_emails_per_second', 10 ),
+			'custom_tracking_domain' => get_option( 'aime_custom_tracking_domain', '' ),
 		) );
 	}
 
@@ -283,6 +284,7 @@ class SettingsController {
 			'resubscribe_button_text' => 'sanitize_text_field',
 			'double_optin'      => 'boolval',
 			'emails_per_second' => 'absint',
+			'custom_tracking_domain' => 'esc_url_raw',
 		);
 
 		// Free tier: enforce at least one footer line (custom footer, company info, or unsubscribe text).

@@ -18,7 +18,7 @@ Powered by your choice of leading AI models (ChatGPT, Claude, Gemini, or OpenRou
 
 The built-in **SEO Analyzer** module gives you AI-powered keyword research, on-page audits, rank tracking, and topical authority mapping — all without leaving WordPress.
 
-🔗 **[View Plugin Website](https://wpthemespace.com/ai-marketing-expert/)** | 🚀 **[Upgrade to Pro](https://wpthemespace.com/product/ai-marketing-expert/)**
+🔗 **[View Plugin Website](https://wpthemespace.com/ai-marketing-expert/)** | 🚀 **[Upgrade to Pro](https://wpthemespace.com/product/ai-marketing-expert/)** | 🚀 **[View documentation](https://wpthemespace.com/ai-marketing-expert-docs)**
 
 Whether you are a blogger, an e-commerce store owner, a small business, or a freelancer managing client sites, AI Marketing Expert gives you enterprise-grade marketing automation at zero extra tool cost.
 
@@ -86,6 +86,14 @@ A complete email CRM, cold outreach, and campaign system built inside WordPress 
 * Multi-connection SMTP with automatic fallback (Gmail, Outlook, Amazon SES, SendGrid, Mailgun, SparkPost, custom SMTP)
 * Test connection before saving
 * List-Unsubscribe headers + one-click unsubscribe footer for compliance
+
+**Email Deliverability & Bounce Management (NEW in 1.2.8)**
+
+* **Zero-Config IMAP Bounce Detection** — Pure PHP IMAP4 SSL socket engine that automatically connects to your mailbox using existing SMTP credentials with zero manual IMAP setup. Independent of the deprecated ext-imap extension (PHP 8.1–8.4+ ready).
+* **Cloud ESP Suppression Sync (Pro)** — Autonomous background synchronization for Brevo, SendGrid, and Mailgun to automatically pull hard bounce events and spam complaints via REST APIs.
+* **Pre-flight DNS MX Deliverability Guard** — Pre-checks recipient domain DNS MX records before dispatch to prevent bounces from invalid domains.
+* **Custom Tracking Domain (Branded CNAME)** — Use your own branded domain (e.g., https://track.yourdomain.com) for open and click tracking.
+* **Deliverability Health Dashboard** — Real-time monitoring of clean vs quarantined bounce ratios with on-demand bounce scanning.
 
 **Free vs Pro**
 
@@ -330,7 +338,7 @@ Yes. You can import subscribers from a CSV file, sync from WordPress registered 
 
 = Where can I get support? =
 
-Visit [wpthemespace.com/ai-marketing-expert](https://wpthemespace.com/ai-marketing-expert/) for documentation and support.
+Visit [wordpress.org/support/plugin/ai-marketing-expert/](https://wordpress.org/support/plugin/ai-marketing-expert/) for documentation and support.
 
 == Privacy Policy ==
 
@@ -379,6 +387,18 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 8. Subscriber management with segmentation
 
 == Changelog ==
+
+= 1.2.8 =
+* New: B2B Lead Finder Free Tier — Free users can now discover and collect up to 5 verified B2B leads daily (up to 100 leads/month)
+* New: Zero-Config IMAP Bounce Detection
+* New: Cloud ESP Suppression Synchronization (Pro) 
+* New: Deliverability & Bounce Health Overview — Dedicated dashboard displaying real-time list health metrics (Active Subscribers, Quarantined Bounces, Unsubscribes), manual "Scan & Quarantine Now" action with instant toast notifications, and recent bounce audit logs.
+* New: Pre-flight DNS MX Deliverability Guard — Pre-checks recipient domain DNS MX records right before SMTP dispatch to prevent sending to dead or non-existent domains.
+* New: Custom Tracking Domain (Branded CNAME) — Configure a branded tracking domain (e.g., https://track.yourdomain.com) for click and open tracking links to elevate domain authority, sender trust, and inbox placement.
+* Improved: Tracking Protocol Whitelist — Open/click tracking URL rewriter now safely preserves non-HTTP protocols (mailto:, tel:, sms:, javascript:, and in-page anchor links) without mangling attributes.
+* Improved: Sequence & Campaign-Level Tracking Toggles — Fine-grained control to enable or disable open and click tracking on specific funnels and campaigns.
+* Improved: Settings Navigation & Persistence — Tab states are now persisted across page reloads via URL hash and local storage, ensuring smooth transitions without losing tab context.
+* Fixed: ToggleControl Layout Alignment — Resolved vertical margin collapse on settings toggle switches across WordPress admin screens.
 
 = 1.2.7 =
 * New: Free Stock Photos in Social Media Composer — Search and 1-click import high-resolution stock photos (Pexels and Pixabay) directly into social media posts and download them to your WordPress Media Library, making Instagram publishing and image posts effortless without needing paid AI image credits.
@@ -502,6 +522,9 @@ All data (subscribers, conversations, campaign history, audit reports) is stored
 * React-based unified admin dashboard
 
 == Upgrade Notice ==
+
+= 1.2.8 =
+Major Deliverability & Lead Finder Release: B2B Lead Finder Free Tier (5 leads/day, 100/month), Zero-Config Pure PHP IMAP Bounce Detection (PHP 8.4 ready), Cloud ESP Suppression Sync (Brevo, SendGrid, Mailgun), Custom Tracking Domain support, Pre-flight DNS MX Deliverability Guard, and Deliverability Health Dashboard. Highly recommended for all users.
 
 = 1.2.7 =
 Feature Release: Free Stock Photos (Pexels & Pixabay) in Social Media Composer, Universal Stock Photo Global Settings, Caption Length Selector (short/medium/long), and fixed Instagram caption truncation for rich, engaging social posts. Highly recommended for all users.

@@ -759,6 +759,7 @@ class RestApi {
 			'delete_data_on_uninstall' => false,
 			'retention_days'   => 60,
 			'woo_cart_cutoff_minutes' => 30,
+			'custom_tracking_domain'  => (string) get_option( 'aime_custom_tracking_domain', '' ),
 		);
 		$settings = wp_parse_args( aime_get_db_option( 'aime_settings', array() ), $defaults );
 
@@ -841,6 +842,7 @@ class RestApi {
 			'unsubscribe_page',
 			'retention_days',
 			'woo_cart_cutoff_minutes',
+			'custom_tracking_domain',
 		);
 
 		foreach ( $allowed as $key ) {
@@ -886,6 +888,10 @@ class RestApi {
 
 		if ( isset( $params['double_optin'] ) ) {
 			update_option( 'aime_double_optin', (bool) $settings['double_optin'], false );
+		}
+
+		if ( isset( $params['custom_tracking_domain'] ) ) {
+			update_option( 'aime_custom_tracking_domain', esc_url_raw( $params['custom_tracking_domain'] ), false );
 		}
 
 		// Save IMAP bounce settings.
@@ -1271,6 +1277,9 @@ class RestApi {
 			case 'track_clicks':
 			case 'gdpr_enabled':
 				return (bool) $value;
+
+			case 'custom_tracking_domain':
+				return esc_url_raw( $value );
 
 			case 'sending_method':
 				$valid = array( 'wp_mail', 'smtp', 'api', 'gmail', 'outlook', 'amazon_ses', 'sendgrid', 'mailgun', 'sparkpost', 'custom' );

@@ -55,11 +55,6 @@ class SmtpProvider {
 	 */
 	public static function get_providers(): array {
 		return array(
-			'wp_mail'    => array(
-				'name'        => __( 'WordPress Default (wp_mail)', 'ai-marketing-expert' ),
-				'description' => __( 'Uses your server\'s default mail configuration.', 'ai-marketing-expert' ),
-				'fields'      => array(),
-			),
 			'gmail'      => array(
 				'name'        => __( 'Gmail / Google Workspace', 'ai-marketing-expert' ),
 				'description' => __( 'Send via Gmail SMTP. Requires an App Password (2FA must be enabled).', 'ai-marketing-expert' ),
@@ -167,6 +162,11 @@ class SmtpProvider {
 				'description' => __( 'Configure any SMTP server manually.', 'ai-marketing-expert' ),
 				'fields'      => array( 'smtp_host', 'smtp_port', 'smtp_encryption', 'smtp_username', 'smtp_password' ),
 			),
+			'wp_mail'    => array(
+				'name'        => __( 'WordPress Default (wp_mail)', 'ai-marketing-expert' ),
+				'description' => __( 'Uses your server\'s default mail configuration.', 'ai-marketing-expert' ),
+				'fields'      => array(),
+			),
 		);
 	}
 
@@ -260,6 +260,11 @@ class SmtpProvider {
 				$b_order = absint( $b['sort_order'] ?? 0 );
 
 				if ( $a_order === $b_order ) {
+					$a_wp = ( $a['provider'] ?? '' ) === 'wp_mail';
+					$b_wp = ( $b['provider'] ?? '' ) === 'wp_mail';
+					if ( $a_wp !== $b_wp ) {
+						return $a_wp ? 1 : -1;
+					}
 					return 0;
 				}
 
@@ -280,10 +285,20 @@ class SmtpProvider {
 			$usage = self::get_connection_usage( $c );
 			$c['has_password'] = ! empty( $c['smtp_password'] );
 			$c['smtp_password'] = $c['has_password'] ? self::PASSWORD_MASK : '';
-			$c['sending_limit'] = max( 1, absint( $c['sending_limit'] ?? self::DEFAULT_DAILY_LIMIT ) );
-			$c['sent_last_24h'] = $usage['count'];
-			$c['limit_reached'] = $usage['count'] >= $c['sending_limit'];
+			if ( 'wp_mail' === ( $c['provider'] ?? '' ) ) {
+				$c['sending_limit'] = 0;
+				$c['sent_last_24h'] = $usage['count'];
+				$c['limit_reached'] = false;
+			} else {
+				$c['sending_limit'] = max( 1, absint( $c['sending_limit'] ?? self::DEFAULT_DAILY_LIMIT ) );
+				$c['sent_last_24h'] = $usage['count'];
+				$c['limit_reached'] = $usage['count'] >= $c['sending_limit'];
+			}
 			$c['limit_reset_at'] = $usage['reset_at'];
+			if ( ! empty( $c['bounce_imap'] ) && is_array( $c['bounce_imap'] ) ) {
+				$c['bounce_imap']['has_password'] = ! empty( $c['bounce_imap']['password'] );
+				$c['bounce_imap']['password']     = $c['bounce_imap']['has_password'] ? self::PASSWORD_MASK : '';
+			}
 			return $c;
 		}, self::get_connections() );
 	}
@@ -312,11 +327,12 @@ class SmtpProvider {
 				? $data['smtp_account_type'] : '',
 			'smtp_port'         => absint( $data['smtp_port'] ?? 587 ),
 			'smtp_encryption' => in_array( $data['smtp_encryption'] ?? 'tls', array( 'none', 'ssl', 'tls' ), true )
-				? $data['smtp_encryption'] : 'tls',
+				? ( $data['smtp_encryption'] ?? 'tls' ) : 'tls',
 			'smtp_username'   => sanitize_text_field( $data['smtp_username'] ?? '' ),
 			'from_name'       => sanitize_text_field( $data['from_name'] ?? '' ),
-			'from_email'      => sanitize_email( $data['from_email'] ?? '' ),
-			'sending_limit'   => max( 1, absint( $data['sending_limit'] ?? self::DEFAULT_DAILY_LIMIT ) ),
+			'sending_limit'   => 'wp_mail' === ( $data['provider'] ?? 'wp_mail' )
+				? 0
+				: max( 1, absint( $data['sending_limit'] ?? self::DEFAULT_DAILY_LIMIT ) ),
 			'sort_order'      => isset( $data['sort_order'] ) ? absint( $data['sort_order'] ) : absint( $existing['sort_order'] ?? count( $connections ) ),
 			'is_primary'      => (bool) ( $data['is_primary'] ?? false ),
 			'enabled'         => (bool) ( $data['enabled'] ?? true ),
@@ -335,6 +351,53 @@ class SmtpProvider {
 			}
 		} else {
 			$conn['smtp_password'] = $existing ? ( $existing['smtp_password'] ?? '' ) : '';
+		}
+
+		// Optional IMAP Bounce Mailbox configuration.
+		if ( isset( $data['bounce_imap'] ) && is_array( $data['bounce_imap'] ) ) {
+			$imap_raw      = $data['bounce_imap'];
+			$imap_pwd      = isset( $imap_raw['password'] ) ? (string) $imap_raw['password'] : '';
+			$existing_imap = $existing['bounce_imap'] ?? array();
+
+			if ( self::PASSWORD_MASK === $imap_pwd ) {
+				$saved_pwd = ! empty( $existing_imap['password'] ) ? $existing_imap['password'] : ( $conn['smtp_password'] ?? '' );
+			} elseif ( '' !== $imap_pwd ) {
+				$saved_pwd = class_exists( __NAMESPACE__ . '\\Encryption' ) ? Encryption::encrypt( $imap_pwd ) : $imap_pwd;
+			} else {
+				$saved_pwd = ! empty( $existing_imap['password'] ) ? $existing_imap['password'] : ( $conn['smtp_password'] ?? '' );
+			}
+
+			$imap_host = sanitize_text_field( $imap_raw['host'] ?? '' );
+			if ( empty( $imap_host ) ) {
+				if ( 'gmail' === $conn['provider'] ) {
+					$imap_host = 'imap.gmail.com';
+				} elseif ( 'outlook' === $conn['provider'] ) {
+					$imap_host = ( 'business' === ( $conn['smtp_account_type'] ?? '' ) ) ? 'outlook.office365.com' : 'imap-mail.outlook.com';
+				} elseif ( 'custom' === $conn['provider'] ) {
+					$imap_host = $conn['smtp_host'];
+				}
+			}
+
+			$imap_user = sanitize_text_field( $imap_raw['username'] ?? '' );
+			if ( empty( $imap_user ) ) {
+				$imap_user = $conn['smtp_username'];
+			}
+
+			$imap_enc = ! empty( $imap_raw['encryption'] ) && in_array( $imap_raw['encryption'], array( 'none', 'ssl', 'tls' ), true )
+				? $imap_raw['encryption']
+				: 'ssl';
+
+			$conn['bounce_imap'] = array(
+				'enabled'              => ! empty( $imap_raw['enabled'] ),
+				'host'                 => $imap_host,
+				'port'                 => absint( $imap_raw['port'] ?? 0 ) ?: 993,
+				'encryption'           => $imap_enc,
+				'username'             => $imap_user,
+				'password'             => $saved_pwd,
+				'delete_after_process' => ! empty( $imap_raw['delete_after_process'] ),
+			);
+		} elseif ( isset( $existing['bounce_imap'] ) ) {
+			$conn['bounce_imap'] = $existing['bounce_imap'];
 		}
 
 		// If setting this as primary, clear other primaries.
@@ -476,7 +539,15 @@ class SmtpProvider {
 			}
 		}
 		if ( ! $has_primary && ! empty( $connections ) ) {
-			$connections[0]['is_primary'] = true;
+			// Intelligently prefer the first active external SMTP connection over wp_mail fallback.
+			$selected_index = 0;
+			foreach ( $connections as $idx => $c ) {
+				if ( ( $c['provider'] ?? 'wp_mail' ) !== 'wp_mail' && ! empty( $c['enabled'] ) ) {
+					$selected_index = $idx;
+					break;
+				}
+			}
+			$connections[ $selected_index ]['is_primary'] = true;
 		}
 
 		$connections = self::normalize_connections( $connections );
@@ -739,6 +810,19 @@ class SmtpProvider {
 		$enabled = array_filter( $enabled_connections, function ( $c ) {
 			return ! self::has_reached_daily_limit( $c );
 		} );
+
+		// Pre-flight DNS MX Deliverability Guard.
+		$preflight_enabled = (bool) apply_filters( 'aime_preflight_mx_guard', (bool) get_option( 'aime_preflight_mx_check', true ), $to );
+		if ( $preflight_enabled ) {
+			$domain = substr( (string) strrchr( $to, '@' ), 1 );
+			if ( ! empty( $domain ) && ! EmailValidator::has_mailable_domain( $domain ) ) {
+				self::record_hard_bounce( $to, sprintf( 'Pre-flight check: Domain %s has no active mail exchangers (MX).', $domain ) );
+				if ( function_exists( 'aime_log' ) ) {
+					aime_log( sprintf( "Pre-flight MX check failed for '%s'. Domain '%s' cannot accept mail. Quarantined as bounced.", $to, $domain ), 'warning' );
+				}
+				return false;
+			}
+		}
 
 		if ( empty( $connections ) ) {
 			return wp_mail( $to, $subject, $body, $headers, $attachments );
@@ -1314,10 +1398,14 @@ class SmtpProvider {
 	 * @return bool
 	 */
 	public static function is_site_mail_enabled(): bool {
-		if ( empty( self::get_detected_smtp_plugins() ) ) {
-			return true;
+		$detected = self::get_detected_smtp_plugins();
+		if ( ! empty( $detected ) ) {
+			// A third-party SMTP plugin is detected (e.g. WP Mail SMTP, FluentSMTP).
+			// Default to FALSE so AI Marketing Expert never conflicts or hijacks site mail.
+			return (bool) get_option( self::SITE_MAIL_OPTION_KEY, false );
 		}
 
+		// No third-party SMTP plugin detected: default to TRUE, but respect if disabled.
 		return (bool) get_option( self::SITE_MAIL_OPTION_KEY, true );
 	}
 
@@ -1398,12 +1486,9 @@ class SmtpProvider {
 	}
 
 	private static function has_reached_daily_limit( array $conn ): bool {
-		// WordPress default (wp_mail) delegates to server/plugins (SES, Bit-SMTP, etc.) and should not be capped by default.
+		// WordPress default (wp_mail) delegates to server/plugins (SES, Bit-SMTP, etc.) and is never capped.
 		if ( 'wp_mail' === ( $conn['provider'] ?? '' ) ) {
-			$custom_limit = absint( $conn['sending_limit'] ?? $conn['daily_limit'] ?? 0 );
-			if ( 0 === $custom_limit || 90 === $custom_limit ) {
-				return false;
-			}
+			return false;
 		}
 
 		$default_limit = (int) apply_filters( 'aime_smtp_default_daily_limit', self::DEFAULT_DAILY_LIMIT, $conn );

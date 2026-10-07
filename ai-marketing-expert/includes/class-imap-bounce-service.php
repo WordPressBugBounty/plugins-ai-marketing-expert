@@ -17,24 +17,91 @@ if ( ! defined( 'ABSPATH' ) ) {
 class ImapBounceService {
 
 	/**
-	 * Process incoming bounce emails from the configured IMAP mailbox.
+	 * Process incoming bounce emails across all configured IMAP mailboxes (per-connection + legacy).
+	 * Pro-only automated bounce scanner.
 	 *
 	 * @return array { processed: int, bounced: int, errors: array }
 	 */
 	public static function process_mailbox(): array {
+		return self::process_all_mailboxes();
+	}
+
+	/**
+	 * Process all active IMAP bounce mailboxes across all SMTP connections.
+	 *
+	 * @return array { processed: int, bounced: int, errors: array }
+	 */
+	public static function process_all_mailboxes(): array {
 		$result = array(
 			'processed' => 0,
 			'bounced'   => 0,
 			'errors'    => array(),
 		);
 
-		if ( ! function_exists( 'imap_open' ) ) {
-			$result['errors'][] = __( 'PHP IMAP extension is not installed or enabled on this server.', 'ai-marketing-expert' );
-			return $result;
+		$is_pro          = aime_has_pro();
+		$processed_count = 0;
+		$all_start_time  = microtime( true );
+		$max_total_time  = 18; // Maximum 18 seconds across all mailboxes to ensure fast web response
+
+		// 1. Process per-connection IMAP settings from active SMTP connections.
+		$connections = SmtpProvider::get_connections();
+		foreach ( $connections as $conn ) {
+			if ( ( microtime( true ) - $all_start_time ) > $max_total_time ) {
+				break;
+			}
+
+			if ( empty( $conn['enabled'] ) || empty( $conn['bounce_imap']['enabled'] ) ) {
+				continue;
+			}
+
+			// In Free tier, limit to 1 primary sending mailbox. Pro users get unlimited multi-account mailboxes.
+			if ( ! $is_pro && $processed_count >= 1 ) {
+				break;
+			}
+
+			$imap_cfg = $conn['bounce_imap'];
+			if ( empty( $imap_cfg['host'] ) || empty( $imap_cfg['username'] ) ) {
+				continue;
+			}
+
+			$sub_res = self::process_single_mailbox( $imap_cfg, 10 );
+			$result['processed'] += $sub_res['processed'];
+			$result['bounced']   += $sub_res['bounced'];
+			if ( ! empty( $sub_res['errors'] ) ) {
+				$result['errors'] = array_merge( $result['errors'], $sub_res['errors'] );
+			}
+			$processed_count++;
 		}
 
-		$settings = get_option( 'aime_bounce_imap_settings', array() );
-		if ( empty( $settings['enabled'] ) || empty( $settings['host'] ) || empty( $settings['username'] ) ) {
+		// 2. Backward compatibility: Process legacy global bounce IMAP settings if configured.
+		$legacy_settings = get_option( 'aime_bounce_imap_settings', array() );
+		if ( ( microtime( true ) - $all_start_time ) <= $max_total_time && ( $is_pro || 0 === $processed_count ) && ! empty( $legacy_settings['enabled'] ) && ! empty( $legacy_settings['host'] ) && ! empty( $legacy_settings['username'] ) ) {
+			$sub_res = self::process_single_mailbox( $legacy_settings, 10 );
+			$result['processed'] += $sub_res['processed'];
+			$result['bounced']   += $sub_res['bounced'];
+			if ( ! empty( $sub_res['errors'] ) ) {
+				$result['errors'] = array_merge( $result['errors'], $sub_res['errors'] );
+			}
+		}
+
+		return $result;
+	}
+
+	/**
+	 * Process a single IMAP mailbox configuration.
+	 *
+	 * @param array $settings    IMAP settings array.
+	 * @param int   $max_seconds Maximum seconds budget for this mailbox scan.
+	 * @return array { processed: int, bounced: int, errors: array }
+	 */
+	public static function process_single_mailbox( array $settings, int $max_seconds = 10 ): array {
+		$result = array(
+			'processed' => 0,
+			'bounced'   => 0,
+			'errors'    => array(),
+		);
+
+		if ( empty( $settings['host'] ) || empty( $settings['username'] ) ) {
 			return $result;
 		}
 
@@ -45,70 +112,69 @@ class ImapBounceService {
 		$password   = ! empty( $settings['password'] ) ? Encryption::decrypt( $settings['password'] ) : '';
 
 		if ( empty( $password ) ) {
-			$result['errors'][] = __( 'IMAP password is missing or cannot be decrypted.', 'ai-marketing-expert' );
+			$result['errors'][] = sprintf( __( 'IMAP password for %s is missing or cannot be decrypted.', 'ai-marketing-expert' ), $username );
 			return $result;
 		}
 
-		// Build connection string.
-		$flags = '/imap';
-		if ( 'ssl' === $encryption ) {
-			$flags .= '/ssl/novalidate-cert';
-		} elseif ( 'tls' === $encryption ) {
-			$flags .= '/tls/novalidate-cert';
-		} else {
-			$flags .= '/notls';
-		}
-
-		$mailbox_string = sprintf( '{%s:%d%s}INBOX', $host, $port, $flags );
-
-		// Suppress warnings from imap_open with error handler.
-		imap_timeout( 1, 15 );
-		imap_timeout( 2, 15 );
-
-		$inbox = @imap_open( $mailbox_string, $username, $password, 0, 1 );
-		if ( ! $inbox ) {
-			$errors  = imap_errors();
-			$err_msg = is_array( $errors ) ? implode( '; ', $errors ) : __( 'Unknown connection error.', 'ai-marketing-expert' );
-			$result['errors'][] = sprintf( 'IMAP connection failed: %s', $err_msg );
-			return $result;
-		}
-
-		// Search for unread bounce messages.
-		$emails = imap_search( $inbox, 'UNSEEN' );
-		if ( empty( $emails ) ) {
-			imap_close( $inbox );
-			return $result;
-		}
-
-		$delete_after = ! empty( $settings['delete_after_process'] );
-		$batch_limit  = 100;
-		$count        = 0;
-
-		foreach ( $emails as $msg_num ) {
-			if ( $count >= $batch_limit ) {
-				break;
-			}
-			$count++;
-			$result['processed']++;
-
-			$header = imap_headerinfo( $inbox, $msg_num );
-			$body   = imap_body( $inbox, $msg_num );
-
-			$failed_email = self::extract_failed_recipient( $header, $body );
-			if ( $failed_email && is_email( $failed_email ) ) {
-				SmtpProvider::record_hard_bounce( $failed_email, 'Automated IMAP bounce mailbox detection' );
-				$result['bounced']++;
+		try {
+			$client = new PureImapClient();
+			$conn   = $client->connect( $host, $port, $encryption );
+			if ( is_wp_error( $conn ) ) {
+				$result['errors'][] = sprintf( '[%s] %s', $username, $conn->get_error_message() );
+				return $result;
 			}
 
-			// Mark as seen or delete.
-			if ( $delete_after ) {
-				imap_delete( $inbox, $msg_num );
-			} else {
-				imap_setflag_full( $inbox, (string) $msg_num, '\\Seen' );
+			$login = $client->login( $username, $password );
+			if ( is_wp_error( $login ) ) {
+				$client->disconnect();
+				$result['errors'][] = sprintf( '[%s] %s', $username, $login->get_error_message() );
+				return $result;
 			}
-		}
 
-		imap_close( $inbox, $delete_after ? CL_EXPUNGE : 0 );
+			$client->select_mailbox( 'INBOX' );
+			$emails = $client->search( 'UNSEEN' );
+
+			if ( is_wp_error( $emails ) || empty( $emails ) ) {
+				$client->disconnect();
+				return $result;
+			}
+
+			$delete_after = ! empty( $settings['delete_after_process'] );
+			$batch_limit  = 25;
+			$count        = 0;
+			$start_time   = microtime( true );
+
+			foreach ( $emails as $msg_num ) {
+				if ( $count >= $batch_limit || ( microtime( true ) - $start_time ) > $max_seconds ) {
+					break;
+				}
+				$count++;
+				$result['processed']++;
+
+				$msg_data = $client->fetch_message( (int) $msg_num );
+				if ( is_wp_error( $msg_data ) ) {
+					continue;
+				}
+
+				$raw_body     = (string) ( $msg_data['raw'] ?? '' );
+				$failed_email = self::extract_failed_recipient( null, $raw_body );
+
+				if ( $failed_email && is_email( $failed_email ) ) {
+					SmtpProvider::record_hard_bounce( $failed_email, 'Automated IMAP bounce mailbox detection' );
+					$result['bounced']++;
+
+					if ( $delete_after ) {
+						$client->delete_message( (int) $msg_num );
+					} else {
+						$client->mark_seen( (int) $msg_num );
+					}
+				}
+			}
+
+			$client->disconnect();
+		} catch ( \Throwable $e ) {
+			$result['errors'][] = sprintf( '[%s] %s', $username, $e->getMessage() );
+		}
 
 		return $result;
 	}
@@ -151,61 +217,6 @@ class ImapBounceService {
 	 * @return array { success: bool, message: string }
 	 */
 	public static function test_connection( array $settings ): array {
-		if ( ! function_exists( 'imap_open' ) ) {
-			return array(
-				'success' => false,
-				'message' => __( 'PHP IMAP extension is not installed or enabled on your server.', 'ai-marketing-expert' ),
-			);
-		}
-
-		$host       = sanitize_text_field( $settings['host'] ?? '' );
-		$port       = absint( $settings['port'] ?? 993 );
-		$encryption = sanitize_text_field( $settings['encryption'] ?? 'ssl' );
-		$username   = sanitize_text_field( $settings['username'] ?? '' );
-		$password   = sanitize_text_field( $settings['password'] ?? '' );
-
-		if ( empty( $host ) || empty( $username ) || empty( $password ) ) {
-			return array(
-				'success' => false,
-				'message' => __( 'Host, username, and password are required.', 'ai-marketing-expert' ),
-			);
-		}
-
-		$flags = '/imap';
-		if ( 'ssl' === $encryption ) {
-			$flags .= '/ssl/novalidate-cert';
-		} elseif ( 'tls' === $encryption ) {
-			$flags .= '/tls/novalidate-cert';
-		} else {
-			$flags .= '/notls';
-		}
-
-		$mailbox_string = sprintf( '{%s:%d%s}INBOX', $host, $port, $flags );
-
-		imap_timeout( 1, 10 );
-		imap_timeout( 2, 10 );
-
-		$inbox = @imap_open( $mailbox_string, $username, $password, 0, 1 );
-		if ( ! $inbox ) {
-			$errors  = imap_errors();
-			$err_msg = is_array( $errors ) ? implode( '; ', $errors ) : __( 'Connection failed. Please check host, port, credentials, and SSL settings.', 'ai-marketing-expert' );
-			return array(
-				'success' => false,
-				'message' => $err_msg,
-			);
-		}
-
-		$check = imap_check( $inbox );
-		$msg_count = $check ? $check->Nmsgs : 0;
-		imap_close( $inbox );
-
-		return array(
-			'success' => true,
-			'message' => sprintf(
-				/* translators: %d: number of messages in inbox */
-				__( 'Connected successfully! Found %d messages in INBOX.', 'ai-marketing-expert' ),
-				$msg_count
-			),
-		);
+		return PureImapClient::test_connection( $settings );
 	}
 }

@@ -58,6 +58,7 @@ class EmailMarketingModule extends Module {
 		add_action( 'aime_process_automations', array( $this, 'handle_automations' ) );
 		add_action( 'aime_daily_cleanup', array( $this, 'daily_cleanup' ) );
 		add_action( 'aime_b2b_lead_autopilot_daily', array( $this, 'run_b2b_lead_autopilot' ) );
+		add_action( 'aime_sync_esp_bounces', array( $this, 'run_sync_esp_bounces' ) );
 		add_filter( 'cron_schedules', array( $this, 'add_cron_schedules' ) );
 		add_filter( 'aime_email-marketing_dashboard_stats', array( $this, 'get_stats' ) );
 		$this->ensure_cron_events();
@@ -362,6 +363,10 @@ class EmailMarketingModule extends Module {
 		if ( ! wp_next_scheduled( 'aime_b2b_lead_autopilot_daily' ) ) {
 			wp_schedule_event( time(), 'daily', 'aime_b2b_lead_autopilot_daily' );
 		}
+
+		if ( ! wp_next_scheduled( 'aime_sync_esp_bounces' ) ) {
+			wp_schedule_event( time(), 'daily', 'aime_sync_esp_bounces' );
+		}
 	}
 
 	public function run_b2b_lead_autopilot(): void {
@@ -370,6 +375,13 @@ class EmailMarketingModule extends Module {
 		}
 		$controller = new Controllers\SubscriberController();
 		$controller->run_scheduled_autopilot();
+	}
+
+	public function run_sync_esp_bounces(): void {
+		if ( ! aime_has_pro() || ! (bool) get_option( 'aime_auto_sync_esp', true ) ) {
+			return;
+		}
+		Services\CloudEspSyncService::sync_all();
 	}
 
 	public function daily_cleanup(): void {
@@ -390,6 +402,11 @@ class EmailMarketingModule extends Module {
 				gmdate( 'Y-m-d H:i:s', strtotime( '-90 days' ) )
 			)
 		);
+
+		// Scan bounce mailboxes (1 primary mailbox on Free, or all mailboxes on Pro).
+		if ( class_exists( 'WPSpace\AiMarketingExpert\ImapBounceService' ) ) {
+			\WPSpace\AiMarketingExpert\ImapBounceService::process_all_mailboxes();
+		}
 	}
 
 	/* ── Dashboard stats ─────────────────────────────────── */
@@ -549,6 +566,34 @@ class EmailMarketingModule extends Module {
 			'status_at_signing' => $status_at_signing,
 			'issued_at'         => $issued_at,
 		);
+	}
+
+	/**
+	 * Get base URL for email tracking and unsubscribe links.
+	 * Supports custom tracking domain (branded CNAME) with fallback to home_url().
+	 *
+	 * @return string Base tracking URL.
+	 */
+	public static function get_tracking_base_url(): string {
+		$custom = trim( (string) get_option( 'aime_custom_tracking_domain', '' ) );
+		$url    = home_url();
+
+		if ( ! empty( $custom ) ) {
+			if ( ! preg_match( '#^https?://#i', $custom ) ) {
+				$custom = ( is_ssl() ? 'https://' : 'http://' ) . $custom;
+			}
+			$validated = esc_url_raw( $custom );
+			if ( ! empty( $validated ) ) {
+				$url = untrailingslashit( $validated );
+			}
+		}
+
+		/**
+		 * Filter the tracking base URL.
+		 *
+		 * @param string $url Base tracking URL.
+		 */
+		return apply_filters( 'aime_tracking_base_url', $url );
 	}
 
 	/* ── Front-end tracking handler ──────────────────────── */

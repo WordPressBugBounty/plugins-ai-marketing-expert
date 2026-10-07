@@ -669,9 +669,28 @@ class CampaignProcessor {
 	}
 
 	private function inject_tracking( string $body, object $email, ?object $campaign = null ): string {
-		$settings     = get_option( 'aime_settings', array() );
-		$track_opens  = ! array_key_exists( 'track_opens', $settings ) || (bool) $settings['track_opens'];
-		$track_clicks = ! array_key_exists( 'track_clicks', $settings ) || (bool) $settings['track_clicks'];
+		$global_settings = get_option( 'aime_settings', array() );
+		$track_opens     = ! array_key_exists( 'track_opens', $global_settings ) || (bool) $global_settings['track_opens'];
+		$track_clicks    = ! array_key_exists( 'track_clicks', $global_settings ) || (bool) $global_settings['track_clicks'];
+
+		// Check campaign-level settings overrides.
+		if ( $campaign && ! empty( $campaign->settings ) ) {
+			$c_settings = is_array( $campaign->settings ) ? $campaign->settings : json_decode( (string) $campaign->settings, true );
+			if ( is_array( $c_settings ) ) {
+				if ( array_key_exists( 'track_opens', $c_settings ) ) {
+					$track_opens = (bool) $c_settings['track_opens'];
+				}
+				if ( array_key_exists( 'track_clicks', $c_settings ) ) {
+					$track_clicks = (bool) $c_settings['track_clicks'];
+				}
+			}
+		}
+
+		/**
+		 * Filter whether to track opens and clicks for this campaign email.
+		 */
+		$track_opens  = (bool) apply_filters( 'aime_campaign_track_opens', $track_opens, $email, $campaign );
+		$track_clicks = (bool) apply_filters( 'aime_campaign_track_clicks', $track_clicks, $email, $campaign );
 
 		// Build UTM params from the campaign's dedicated columns when UTM is enabled.
 		$utm_params = array();
@@ -687,6 +706,8 @@ class CampaignProcessor {
 			return $body;
 		}
 
+		$base_tracking_url = \WPSpace\AiMarketingExpert\Modules\EmailMarketing\EmailMarketingModule::get_tracking_base_url();
+
 		// Open tracking pixel.
 		$pixel_url = add_query_arg(
 			array(
@@ -694,29 +715,48 @@ class CampaignProcessor {
 				'hash'       => $email->email_hash,
 				'token'      => \WPSpace\AiMarketingExpert\Modules\EmailMarketing\EmailMarketingModule::create_tracking_hash( (int) $email->campaign_id, (int) $email->subscriber_id ),
 			),
-			home_url()
+			$base_tracking_url
 		);
 		$pixel = '<img src="' . esc_url( $pixel_url ) . '" width="1" height="1" style="display:none" alt="" />';
 
 		if ( $track_clicks || ! empty( $utm_params ) ) {
 			// Wrap links for click tracking and/or append UTM params.
 			$body = preg_replace_callback(
-				'/<a\s[^>]*href=["\']([^"\']+)["\'][^>]*>/i',
-				function ( $matches ) use ( $email, $track_clicks, $utm_params ) {
-					$original = $matches[1];
-					if ( strpos( $original, 'aime_track' ) !== false ) {
+				'/<a\s([^>]*)href=["\']([^"\']+)["\']([^>]*)>/i',
+				function ( $matches ) use ( $email, $track_clicks, $utm_params, $base_tracking_url ) {
+					$before_href = $matches[1];
+					$original    = trim( $matches[2] );
+					$after_href  = $matches[3];
+
+					if ( false !== strpos( $original, 'aime_track' ) ) {
 						return $matches[0]; // Already tracked.
 					}
 
-					// Skip mailto/tel/anchor links for UTM.
-					$scheme = strtolower( (string) wp_parse_url( $original, PHP_URL_SCHEME ) );
+					// Protocol whitelisting: Strictly skip mailto, tel, sms, javascript, and anchor # links.
+					$lower = strtolower( $original );
+					if (
+						'' === $original ||
+						'#' === $original[0] ||
+						0 === strpos( $lower, 'mailto:' ) ||
+						0 === strpos( $lower, 'tel:' ) ||
+						0 === strpos( $lower, 'sms:' ) ||
+						0 === strpos( $lower, 'javascript:' )
+					) {
+						return $matches[0];
+					}
+
+					// Only rewrite valid HTTP / HTTPS web links.
+					if ( 0 !== strpos( $lower, 'http://' ) && 0 !== strpos( $lower, 'https://' ) ) {
+						return $matches[0];
+					}
+
 					$with_utm = $original;
-					if ( ! empty( $utm_params ) && in_array( $scheme, array( 'http', 'https', '' ), true ) ) {
+					if ( ! empty( $utm_params ) ) {
 						$with_utm = add_query_arg( $utm_params, $original );
 					}
 
 					if ( ! $track_clicks ) {
-						return str_replace( $original, $with_utm, $matches[0] );
+						return '<a ' . $before_href . 'href="' . esc_url( $with_utm ) . '"' . $after_href . '>';
 					}
 
 					$tracked = add_query_arg(
@@ -727,9 +767,10 @@ class CampaignProcessor {
 							'url'        => rawurlencode( $with_utm ),
 							'sig'        => \WPSpace\AiMarketingExpert\Modules\EmailMarketing\EmailMarketingModule::create_url_signature( (int) $email->campaign_id, (int) $email->subscriber_id, $with_utm ),
 						),
-						home_url()
+						$base_tracking_url
 					);
-					return str_replace( $original, $tracked, $matches[0] );
+
+					return '<a ' . $before_href . 'href="' . esc_url( $tracked ) . '"' . $after_href . '>';
 				},
 				$body
 			);
@@ -879,12 +920,14 @@ class CampaignProcessor {
 			(int) ( $email->subscriber_id ?? 0 ),
 			(string) ( $email->subscriber_status ?? 'subscribed' )
 		);
+		$base_tracking_url = \WPSpace\AiMarketingExpert\Modules\EmailMarketing\EmailMarketingModule::get_tracking_base_url();
+
 		return add_query_arg(
 			array(
 				'aime_track' => 'unsubscribe',
 				'hash'       => $hash,
 			),
-			home_url()
+			$base_tracking_url
 		);
 	}
 
@@ -901,12 +944,14 @@ class CampaignProcessor {
 				array( 'id' => (int) $email->id )
 			);
 		}
+		$base_tracking_url = \WPSpace\AiMarketingExpert\Modules\EmailMarketing\EmailMarketingModule::get_tracking_base_url();
+
 		return add_query_arg(
 			array(
 				'aime_track' => 'web_view',
 				'hash'       => $hash,
 			),
-			home_url()
+			$base_tracking_url
 		);
 	}
 
