@@ -31,6 +31,13 @@ class PostController {
 
 	private static function bump_cache_version(): void {
 		wp_cache_set( 'version', (string) microtime( true ), self::CACHE_GROUP, self::CACHE_TTL );
+		wp_cache_flush();
+		if ( has_action( 'litespeed_purge' ) ) {
+			do_action( 'litespeed_purge' );
+		}
+		if ( class_exists( '\LiteSpeed\Purge' ) && method_exists( '\LiteSpeed\Purge', 'purge_all' ) ) {
+			\LiteSpeed\Purge::purge_all();
+		}
 	}
 
 	private static function build_cache_key( string $prefix, array $parts = array() ): string {
@@ -61,7 +68,11 @@ class PostController {
 		) );
 		$cached = wp_cache_get( $cache_key, self::CACHE_GROUP );
 		if ( false !== $cached ) {
-			return new \WP_REST_Response( $cached );
+			$cached_resp = new \WP_REST_Response( $cached );
+			$cached_resp->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0' );
+			$cached_resp->header( 'Pragma', 'no-cache' );
+			$cached_resp->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
+			return $cached_resp;
 		}
 
 		// phpcs:disable WordPress.DB.DirectDatabaseQuery.DirectQuery, WordPress.DB.DirectDatabaseQuery.NoCaching -- The index response is cached via wp_cache_get()/wp_cache_set() in this method.
@@ -221,7 +232,11 @@ class PostController {
 
 		wp_cache_set( $cache_key, $response, self::CACHE_GROUP, self::CACHE_TTL );
 
-		return new \WP_REST_Response( $response );
+		$rest_response = new \WP_REST_Response( $response );
+		$rest_response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0' );
+		$rest_response->header( 'Pragma', 'no-cache' );
+		$rest_response->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
+		return $rest_response;
 	}
 
 	/**
@@ -376,10 +391,16 @@ class PostController {
 			self::bump_cache_version();
 
 			if ( ! $pub_result['success'] ) {
+				$err_msg = $pub_result['error'] ?? __( 'Failed to publish post.', 'ai-marketing-expert' );
 				return new \WP_REST_Response( array(
 					'id'      => $post_id,
-					'message' => $pub_result['error'] ?? __( 'Failed to publish post.', 'ai-marketing-expert' ),
-				), 200 ); // Still 200 because post was created.
+					'success' => false,
+					'message' => sprintf(
+						/* translators: %s: error details */
+						__( 'Post saved, but publishing to platform failed: %s', 'ai-marketing-expert' ),
+						$err_msg
+					),
+				), 400 );
 			}
 		}
 

@@ -61,7 +61,7 @@ class SocialRestController {
 			'callback'            => array( $c, 'connect' ),
 			'permission_callback' => array( $this, 'admin_permission' ),
 			'args'                => array(
-				'platform' => array( 'type' => 'string', 'required' => true, 'enum' => array( 'facebook', 'instagram', 'x' ), 'sanitize_callback' => 'sanitize_text_field' ),
+				'platform' => array( 'type' => 'string', 'required' => true, 'enum' => array( 'facebook', 'instagram', 'x', 'linkedin' ), 'sanitize_callback' => 'sanitize_text_field' ),
 			),
 		) );
 
@@ -76,12 +76,22 @@ class SocialRestController {
 			),
 		) );
 
+		register_rest_route( $this->ns, '/social/accounts/save-selected', array(
+			'methods'             => 'POST',
+			'callback'            => array( $c, 'save_selected' ),
+			'permission_callback' => array( $this, 'admin_permission' ),
+			'args'                => array(
+				'session_id'   => array( 'type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_text_field' ),
+				'selected_ids' => array( 'type' => 'array', 'required' => true ),
+			),
+		) );
+
 		register_rest_route( $this->ns, '/social/accounts/connect-manual', array(
 			'methods'             => 'POST',
 			'callback'            => array( $c, 'connect_manual' ),
 			'permission_callback' => array( $this, 'admin_permission' ),
 			'args'                => array(
-					'platform'          => array( 'type' => 'string', 'required' => true, 'enum' => array( 'facebook', 'instagram', 'x' ), 'sanitize_callback' => 'sanitize_text_field' ),
+					'platform'          => array( 'type' => 'string', 'required' => true, 'enum' => array( 'facebook', 'instagram', 'x', 'linkedin' ), 'sanitize_callback' => 'sanitize_text_field' ),
 					'access_token'     => array( 'type' => 'string', 'required' => true, 'sanitize_callback' => 'sanitize_text_field' ),
 					'access_secret'    => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),
 					'api_key'          => array( 'type' => 'string', 'default' => '', 'sanitize_callback' => 'sanitize_text_field' ),

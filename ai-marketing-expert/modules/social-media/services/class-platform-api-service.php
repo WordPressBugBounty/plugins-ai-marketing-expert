@@ -59,7 +59,7 @@ class PlatformApiService {
 			case 'facebook':
 				return $this->validate_facebook_token( $access_token );
 			case 'instagram':
-				return $this->validate_instagram_token( $access_token );
+				return $this->validate_instagram_token( $access_token, (string) ( $account->platform_user_id ?? '' ) );
 			case 'x':
 				return $this->validate_x_token( $account );
 			case 'linkedin':
@@ -451,10 +451,33 @@ class PlatformApiService {
 		);
 	}
 
-	private function validate_instagram_token( string $token ): array {
+	private function validate_instagram_token( string $token, string $ig_user_id = '' ): array {
+		// 1. If we have the Instagram Account ID, query graph.facebook.com first (for accounts connected via Facebook Login)
+		if ( ! empty( $ig_user_id ) ) {
+			$fb_resp = wp_remote_get(
+				'https://graph.facebook.com/v21.0/' . rawurlencode( $ig_user_id ) . '?fields=id,username,name&access_token=' . rawurlencode( $token ),
+				array( 'timeout' => 15 )
+			);
+
+			if ( ! is_wp_error( $fb_resp ) ) {
+				$fb_body = json_decode( wp_remote_retrieve_body( $fb_resp ), true );
+				if ( ! empty( $fb_body['id'] ) && empty( $fb_body['error'] ) ) {
+					return array(
+						'valid'   => true,
+						'message' => sprintf(
+							/* translators: %s: account name */
+							__( 'Verified connection to Instagram account: %s.', 'ai-marketing-expert' ),
+							$fb_body['name'] ?? $fb_body['username'] ?? $ig_user_id
+						),
+					);
+				}
+			}
+		}
+
+		// 2. Fallback to graph.instagram.com/v21.0/me for standalone Instagram Business Login tokens
 		$response = wp_remote_get(
-			'https://graph.instagram.com/v25.0/me?fields=user_id,username,name&access_token=' . rawurlencode( $token ),
-			array( 'timeout' => 12 )
+			'https://graph.instagram.com/v21.0/me?fields=user_id,username,name&access_token=' . rawurlencode( $token ),
+			array( 'timeout' => 15 )
 		);
 
 		if ( is_wp_error( $response ) ) {
@@ -469,8 +492,8 @@ class PlatformApiService {
 			);
 		}
 
-		$ig_user_id = (string) ( $body['user_id'] ?? $body['id'] ?? '' );
-		if ( empty( $ig_user_id ) ) {
+		$resolved_id = (string) ( $body['user_id'] ?? $body['id'] ?? '' );
+		if ( empty( $resolved_id ) ) {
 			return array( 'valid' => false, 'message' => __( 'Could not identify Instagram account from token.', 'ai-marketing-expert' ) );
 		}
 
@@ -479,7 +502,7 @@ class PlatformApiService {
 			'message' => sprintf(
 				/* translators: %s: account name */
 				__( 'Verified connection to Instagram account: %s.', 'ai-marketing-expert' ),
-				$body['name'] ?? $body['username'] ?? $ig_user_id
+				$body['name'] ?? $body['username'] ?? $resolved_id
 			),
 		);
 	}
@@ -493,53 +516,163 @@ class PlatformApiService {
 			return array( 'success' => false, 'message' => __( 'Instagram requires at least one image.', 'ai-marketing-expert' ) );
 		}
 
-		$image_url = $media_urls[0];
-
 		// Instagram's servers must be able to fetch the image URL — local/private URLs won't work.
-		$host = wp_parse_url( $image_url, PHP_URL_HOST );
-		if ( $host && in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true ) ) {
-			return array(
-				'success' => false,
-				'message' => __( 'Instagram cannot access local (localhost) image URLs. Upload your images to a publicly accessible server first.', 'ai-marketing-expert' ),
-			);
+		foreach ( $media_urls as $url ) {
+			$host = wp_parse_url( $url, PHP_URL_HOST );
+			if ( $host && in_array( $host, array( 'localhost', '127.0.0.1', '::1' ), true ) ) {
+				return array(
+					'success' => false,
+					'message' => __( 'Instagram cannot access local (localhost) image URLs. Upload your images to a publicly accessible server first.', 'ai-marketing-expert' ),
+				);
+			}
 		}
 
-		$base = 'https://graph.instagram.com/v25.0';
+		// Endpoint resolution: try graph.facebook.com first (for Instagram accounts connected via Facebook Login/Pages),
+		// then fallback to graph.instagram.com (for direct Instagram Login).
+		$endpoints = array(
+			'https://graph.facebook.com/v21.0',
+			'https://graph.instagram.com/v21.0',
+		);
 
-		// Step 1: Create media container.
-		$response = wp_remote_post( "{$base}/{$ig_user_id}/media", array(
-			'timeout' => 30,
-			'headers' => array( 'Content-Type' => 'application/json' ),
-			'body'    => wp_json_encode( array(
-				'media_type'   => 'IMAGE',
-				'image_url'    => $image_url,
+		$last_error = '';
+
+		foreach ( $endpoints as $base ) {
+			$result = $this->execute_instagram_publish( $base, $token, $ig_user_id, $content, $media_urls );
+			if ( $result['success'] ) {
+				return $result;
+			}
+
+			// If it's a token parse error or OAuth error, try next endpoint
+			$last_error = $result['message'] ?? '';
+			if ( false !== strpos( $last_error, 'Cannot parse access token' ) || false !== strpos( $last_error, 'OAuthException' ) ) {
+				continue;
+			}
+
+			// For specific business errors (e.g. image aspect ratio, invalid format), return immediately
+			return $result;
+		}
+
+		return array(
+			'success' => false,
+			'message' => $last_error ?: __( 'Instagram publish failed.', 'ai-marketing-expert' ),
+		);
+	}
+
+	private function execute_instagram_publish( string $base, string $token, string $ig_user_id, string $content, array $media_urls ): array {
+		$creation_id = null;
+
+		if ( count( $media_urls ) === 1 ) {
+			// Single Image
+			$post_body = array(
+				'image_url'    => $media_urls[0],
 				'caption'      => $content,
 				'access_token' => $token,
-			) ),
-		) );
+			);
 
-		if ( is_wp_error( $response ) ) {
-			return array( 'success' => false, 'message' => $response->get_error_message() );
+			$response = wp_remote_post( "{$base}/{$ig_user_id}/media", array(
+				'timeout' => 45,
+				'body'    => $post_body,
+			) );
+
+			if ( is_wp_error( $response ) ) {
+				return array( 'success' => false, 'message' => $response->get_error_message() );
+			}
+
+			$body = json_decode( wp_remote_retrieve_body( $response ), true );
+			if ( empty( $body['id'] ) ) {
+				return array(
+					'success' => false,
+					'message' => $body['error']['message'] ?? __( 'Instagram media container creation failed.', 'ai-marketing-expert' ),
+				);
+			}
+
+			$creation_id = $body['id'];
+		} else {
+			// Multiple Images (Carousel, up to 10)
+			$carousel_items = array_slice( $media_urls, 0, 10 );
+			$item_ids       = array();
+
+			foreach ( $carousel_items as $img_url ) {
+				$item_resp = wp_remote_post( "{$base}/{$ig_user_id}/media", array(
+					'timeout' => 45,
+					'body'    => array(
+						'image_url'        => $img_url,
+						'is_carousel_item' => 'true',
+						'access_token'     => $token,
+					),
+				) );
+
+				if ( is_wp_error( $item_resp ) ) {
+					return array( 'success' => false, 'message' => $item_resp->get_error_message() );
+				}
+
+				$item_body = json_decode( wp_remote_retrieve_body( $item_resp ), true );
+				if ( empty( $item_body['id'] ) ) {
+					return array(
+						'success' => false,
+						'message' => $item_body['error']['message'] ?? __( 'Instagram carousel item creation failed.', 'ai-marketing-expert' ),
+					);
+				}
+
+				$item_ids[] = $item_body['id'];
+			}
+
+			// Create parent carousel container
+			$parent_resp = wp_remote_post( "{$base}/{$ig_user_id}/media", array(
+				'timeout' => 45,
+				'body'    => array(
+					'media_type'   => 'CAROUSEL',
+					'children'     => implode( ',', $item_ids ),
+					'caption'      => $content,
+					'access_token' => $token,
+				),
+			) );
+
+			if ( is_wp_error( $parent_resp ) ) {
+				return array( 'success' => false, 'message' => $parent_resp->get_error_message() );
+			}
+
+			$parent_body = json_decode( wp_remote_retrieve_body( $parent_resp ), true );
+			if ( empty( $parent_body['id'] ) ) {
+				return array(
+					'success' => false,
+					'message' => $parent_body['error']['message'] ?? __( 'Instagram carousel container creation failed.', 'ai-marketing-expert' ),
+				);
+			}
+
+			$creation_id = $parent_body['id'];
 		}
 
-		$body = json_decode( wp_remote_retrieve_body( $response ), true );
-		if ( empty( $body['id'] ) ) {
-			return array( 'success' => false, 'message' => $body['error']['message'] ?? __( 'Instagram container creation failed.', 'ai-marketing-expert' ) );
+		// Wait and poll status until FINISHED (up to 12 seconds)
+		for ( $attempt = 0; $attempt < 6; $attempt++ ) {
+			sleep( 2 );
+			$status_resp = wp_remote_get(
+				"{$base}/{$creation_id}?fields=status_code&access_token=" . rawurlencode( $token ),
+				array( 'timeout' => 15 )
+			);
+
+			if ( ! is_wp_error( $status_resp ) ) {
+				$status_body = json_decode( wp_remote_retrieve_body( $status_resp ), true );
+				$status_code = $status_body['status_code'] ?? '';
+				if ( 'FINISHED' === $status_code ) {
+					break;
+				}
+				if ( 'ERROR' === $status_code || 'EXPIRED' === $status_code ) {
+					return array(
+						'success' => false,
+						'message' => __( 'Instagram container processing failed.', 'ai-marketing-expert' ),
+					);
+				}
+			}
 		}
 
-		$creation_id = $body['id'];
-
-		// Step 2: Wait briefly for processing.
-		sleep( 2 );
-
-		// Step 3: Publish the container.
+		// Publish the container
 		$pub_response = wp_remote_post( "{$base}/{$ig_user_id}/media_publish", array(
-			'timeout' => 30,
-			'headers' => array( 'Content-Type' => 'application/json' ),
-			'body'    => wp_json_encode( array(
+			'timeout' => 45,
+			'body'    => array(
 				'creation_id'  => $creation_id,
 				'access_token' => $token,
-			) ),
+			),
 		) );
 
 		if ( is_wp_error( $pub_response ) ) {

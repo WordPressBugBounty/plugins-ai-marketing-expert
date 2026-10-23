@@ -88,12 +88,14 @@
 			if (c.page_url) {
 				try { pagePath = new URL(c.page_url).pathname; } catch (e) { pagePath = c.page_url; }
 			}
-			var convUrl = baseUrl + '#conversation/' + c.id;
+			var convId = parseInt(c.id, 10) || 0;
+			var convUrl = baseUrl + '#conversation/' + convId;
+			var msgCount = parseInt(c.msg_count, 10) || 0;
 			html += '<a href="' + escapeHTML(convUrl) + '" class="' + itemClass + '" title="Open conversation with ' + escapeHTML(c.visitor_name) + '">';
 			html += '<span class="aime-dw__feed-dot ' + dotClass + '"></span>';
 			html += '<span class="aime-dw__feed-name">' + escapeHTML(c.visitor_name) + '</span>';
 			if (pagePath) html += '<span class="aime-dw__feed-page">' + escapeHTML(pagePath) + '</span>';
-			html += '<span class="aime-dw__feed-meta">' + c.msg_count + ' msg' + (c.msg_count !== 1 ? 's' : '') + '</span>';
+			html += '<span class="aime-dw__feed-meta">' + msgCount + ' msg' + (msgCount !== 1 ? 's' : '') + '</span>';
 			html += '<span class="aime-dw__feed-time">' + escapeHTML(c.time_ago || '') + '</span>';
 			html += '<span class="dashicons dashicons-arrow-right-alt2 aime-dw__feed-arrow" aria-hidden="true"></span>';
 			html += '</a>';
@@ -238,10 +240,13 @@
 	}
 
 	function escapeHTML(str) {
-		if (!str) return '';
-		var div = document.createElement('div');
-		div.appendChild(document.createTextNode(str));
-		return div.innerHTML;
+		if (str === null || str === undefined) return '';
+		return String(str)
+			.replace(/&/g, '&amp;')
+			.replace(/</g, '&lt;')
+			.replace(/>/g, '&gt;')
+			.replace(/"/g, '&quot;')
+			.replace(/'/g, '&#39;');
 	}
 
 	// ── Init ──────────────────────────────────────────

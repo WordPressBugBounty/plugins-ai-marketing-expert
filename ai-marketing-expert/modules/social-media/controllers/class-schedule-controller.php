@@ -48,7 +48,11 @@ class ScheduleController {
 			$item->media_urls = json_decode( $item->media_urls ?: '[]', true );
 		}
 
-		return new \WP_REST_Response( array( 'items' => $items ?: array() ) );
+		$response = new \WP_REST_Response( array( 'items' => $items ?: array() ) );
+		$response->header( 'Cache-Control', 'no-store, no-cache, must-revalidate, max-age=0' );
+		$response->header( 'Pragma', 'no-cache' );
+		$response->header( 'X-LiteSpeed-Cache-Control', 'no-cache' );
+		return $response;
 	}
 
 	/**

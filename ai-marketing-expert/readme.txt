@@ -364,6 +364,10 @@ All API credentials and SMTP passwords are encrypted at rest (AES-256-GCM) in yo
 
 == Changelog ==
 
+= 1.2.9 =
+* Fix: Important security update.
+* Improved: Social media platform connectivity and OAuth setup.
+
 = 1.2.8 =
 * New: B2B Lead Finder Free Tier — Free users can now discover and collect up to 5 verified B2B leads daily (up to 100 leads/month) with real-time quota meters, 1-click CRM list importing, and live DNS MX deliverability checks with zero WordPress.org guideline violations.
 * New: Zero-Config IMAP Bounce Detection — Pure PHP IMAP4 SSL socket client that auto-derives and connects to bounce mailboxes directly using your existing SMTP credentials (Gmail, Outlook, Hostinger, cPanel, Custom) with zero manual IMAP setup. Completely independent of the deprecated ext-imap extension, ensuring 100% compatibility across PHP 8.1, 8.2, 8.3, and PHP 8.4+.
@@ -498,6 +502,9 @@ All API credentials and SMTP passwords are encrypted at rest (AES-256-GCM) in yo
 * React-based unified admin dashboard
 
 == Upgrade Notice ==
+
+= 1.2.9 =
+Important security update and enhancements for social media connections. Upgrading is strongly recommended for all users.
 
 = 1.2.8 =
 Major Deliverability & Lead Finder Release: B2B Lead Finder Free Tier (5 leads/day, 100/month), Zero-Config Pure PHP IMAP Bounce Detection (PHP 8.4 ready), Cloud ESP Suppression Sync (Brevo, SendGrid, Mailgun), Custom Tracking Domain support, Pre-flight DNS MX Deliverability Guard, and Deliverability Health Dashboard. Highly recommended for all users.

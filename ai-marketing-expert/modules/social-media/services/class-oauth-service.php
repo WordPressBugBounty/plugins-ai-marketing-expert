@@ -74,7 +74,7 @@ class OAuthService {
 		$callback = $this->get_callback_url();
 
 		if ( 'proxy' === $mode ) {
-			return $this->exchange_proxy_token( $platform, $code, $callback );
+			return $this->exchange_proxy_token( $platform, $code, $callback, $state );
 		}
 
 		return $this->exchange_manual_token( $platform, $code, $callback, $settings );
@@ -111,19 +111,20 @@ class OAuthService {
 		$url = add_query_arg( array(
 			'platform' => $platform,
 			'state'    => $state,
-			'callback' => rawurlencode( $callback ),
-			'site'     => rawurlencode( home_url() ),
+			'callback' => $callback,
+			'site'     => home_url(),
 		), self::PROXY_URL . '/authorize' );
 
 		return array( 'success' => true, 'url' => $url );
 	}
 
-	private function exchange_proxy_token( string $platform, string $code, string $callback ): array {
+	private function exchange_proxy_token( string $platform, string $code, string $callback, string $state ): array {
 		$response = wp_remote_post( self::PROXY_URL . '/token', array(
 			'timeout' => 30,
 			'body'    => array(
 				'platform' => $platform,
 				'code'     => $code,
+				'state'    => $state,
 				'callback' => $callback,
 				'site'     => home_url(),
 			),

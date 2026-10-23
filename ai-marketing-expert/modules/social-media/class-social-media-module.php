@@ -79,14 +79,11 @@ class SocialMediaModule extends Module {
 		add_action( 'transition_post_status', array( $this, 'on_post_publish' ), 10, 3 );
 
 		/*
-		 * Auto-connect (OAuth) callback bridge — DISABLED for now.
+		 * Auto-connect (OAuth) callback bridge.
 		 *
-		 * The manual connection flow is the only one live today. When the
-		 * OAuth auto-connect flow is enabled, uncomment the line below AND the
-		 * popup handler in src/components/modules/SocialMedia/ConnectAccountModal.jsx.
-		 * Both must be enabled together. See render_oauth_bridge() for details.
+		 * Receives redirect from OAuth proxy and relays credentials to opener window.
 		 */
-		// add_action( 'template_redirect', array( $this, 'render_oauth_bridge' ) );
+		add_action( 'template_redirect', array( $this, 'render_oauth_bridge' ) );
 	}
 
 	/**
@@ -265,15 +262,18 @@ class SocialMediaModule extends Module {
 
 	/* ── Database tables ─────────────────────────────────── */
 
-	private function maybe_create_tables(): void {
+	public function maybe_create_tables(): void {
+		global $wpdb;
+		$p = $wpdb->prefix;
+		$table_exists = (bool) $wpdb->get_var( $wpdb->prepare( 'SHOW TABLES LIKE %s', "{$p}aime_social_accounts" ) );
+
 		$installed = get_option( 'aime_social_media_db_version', '' );
-		if ( version_compare( $installed, AIME_SOCIAL_DB_VERSION, '>=' ) ) {
+		if ( $table_exists && version_compare( $installed, AIME_SOCIAL_DB_VERSION, '>=' ) ) {
 			return;
 		}
 
 		require_once ABSPATH . 'wp-admin/includes/upgrade.php';
 
-		global $wpdb;
 		$charset = $wpdb->get_charset_collate();
 		$this->create_tables( $charset );
 
@@ -363,23 +363,19 @@ class SocialMediaModule extends Module {
 
 		return array(
 			'total_accounts'   => (int) $wpdb->get_var( $wpdb->prepare(
-				'SELECT COUNT(*) FROM %i WHERE status = %s',
-				$accounts_table,
+				"SELECT COUNT(*) FROM {$accounts_table} WHERE status = %s",
 				'connected'
 			) ),
 			'posts_this_month' => (int) $wpdb->get_var( $wpdb->prepare(
-				'SELECT COUNT(*) FROM %i WHERE created_at >= %s',
-				$posts_table,
+				"SELECT COUNT(*) FROM {$posts_table} WHERE created_at >= %s",
 				$month_start
 			) ),
 			'scheduled_posts'  => (int) $wpdb->get_var( $wpdb->prepare(
-				'SELECT COUNT(*) FROM %i WHERE status = %s',
-				$posts_table,
+				"SELECT COUNT(*) FROM {$posts_table} WHERE status = %s",
 				'scheduled'
 			) ),
 			'published_month'  => (int) $wpdb->get_var( $wpdb->prepare(
-				'SELECT COUNT(*) FROM %i WHERE status = %s AND published_at >= %s',
-				$posts_table,
+				"SELECT COUNT(*) FROM {$posts_table} WHERE status = %s AND published_at >= %s",
 				'published',
 				$month_start
 			) ),
@@ -400,8 +396,7 @@ class SocialMediaModule extends Module {
 
 		return (int) $wpdb->get_var(
 			$wpdb->prepare(
-				'SELECT COUNT(*) FROM %i WHERE created_at >= %s',
-				$posts_table,
+				"SELECT COUNT(*) FROM {$posts_table} WHERE created_at >= %s",
 				gmdate( 'Y-m-01 00:00:00' )
 			)
 		);
@@ -426,9 +421,7 @@ class SocialMediaModule extends Module {
 			return 0;
 		}
 
-		return (int) $wpdb->get_var(
-			$wpdb->prepare( 'SELECT COUNT(*) FROM %i', $accounts_table )
-		);
+		return (int) $wpdb->get_var( "SELECT COUNT(*) FROM {$accounts_table}" );
 	}
 }
 

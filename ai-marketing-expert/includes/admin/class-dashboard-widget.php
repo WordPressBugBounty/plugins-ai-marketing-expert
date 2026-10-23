@@ -207,10 +207,10 @@ class DashboardWidget {
 			foreach ( $rows as $row ) {
 				$recent[] = array(
 					'id'           => (int) $row->id,
-					'visitor_name' => $row->visitor_name ? $row->visitor_name : __( 'Visitor', 'ai-marketing-expert' ),
-					'page_url'     => $row->page_url ? $row->page_url : '',
-					'status'       => $row->status,
-					'last_message' => $row->last_message ? $row->last_message : '',
+					'visitor_name' => $row->visitor_name ? sanitize_text_field( $row->visitor_name ) : __( 'Visitor', 'ai-marketing-expert' ),
+					'page_url'     => $row->page_url ? esc_url_raw( $row->page_url ) : '',
+					'status'       => sanitize_key( $row->status ),
+					'last_message' => $row->last_message ? sanitize_text_field( $row->last_message ) : '',
 					'msg_count'    => (int) $row->msg_count,
 					'created_at'   => $row->created_at,
 					'time_ago'     => sprintf(
